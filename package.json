@@ -1,14 +1,40 @@
 {
   "name": "zk-secret-santa",
-  "version": "0.1.0",
-  "private": true,
-  "workspaces": [
-    "cli"
-  ],
+  "version": "0.0.0",
+  "description": "ZK Secret Santa - Privacy-preserving Secret Santa protocol on Aztec",
+  "license": "MIT",
+  "type": "module",
   "scripts": {
-    "cli": "pnpm --filter zkss-cli"
+    "clean": "rm -rf ./artifacts ./target codegenCache.json",
+    "codegen": "aztec codegen target --outdir ./artifacts --force",
+    "compile": "aztec-nargo compile && aztec-postprocess-contract",
+    "test": "yarn test:js",
+    "test:js": "vitest run",
+    "test:noir": "aztec test --silence-warnings",
+    "ccc": "yarn clean && yarn compile && yarn codegen",
+    "cli": "tsx src/cli/index.ts"
+  },
+  "dependencies": {
+    "@aztec/accounts": "3.0.0-devnet.2",
+    "@aztec/aztec.js": "3.0.0-devnet.2",
+    "@aztec/kv-store": "3.0.0-devnet.2",
+    "@aztec/pxe": "3.0.0-devnet.2",
+    "@aztec/stdlib": "3.0.0-devnet.2",
+    "@aztec/test-wallet": "3.0.0-devnet.2",
+    "@inquirer/prompts": "^7.2.1",
+    "@types/node": "22.5.1",
+    "chalk": "^5.4.1",
+    "commander": "^13.1.0"
   },
   "devDependencies": {
-    "typescript": "^5.3.0"
+    "@types/jest": "29.5.11",
+    "tsx": "4.20.4",
+    "typescript": "5.9.2",
+    "vitest": "3.2.4"
+  },
+  "packageManager": "yarn@1.22.22",
+  "engines": {
+    "node": ">=22.0.0",
+    "yarn": ">=1.22.0"
   }
 }

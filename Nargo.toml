@@ -1,5 +1,5 @@
 [workspace]
 members = [
-"contracts/secret_santa",
+"src/secret_santa_contract",
 ]
 
