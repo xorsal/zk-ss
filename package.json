@@ -10,9 +10,10 @@
     "compile": "aztec-nargo compile && aztec-postprocess-contract",
     "test": "yarn test:js",
     "test:js": "vitest run",
-    "test:noir": "aztec test --silence-warnings",
+    "test:noir": "aztec test",
     "ccc": "yarn clean && yarn compile && yarn codegen",
-    "cli": "tsx src/cli/index.ts"
+    "cli": "tsx src/cli/index.ts",
+    "bundle-cli": "yarn ccc && mkdir -p cli/src/artifacts cli/src/target && cp artifacts/SecretSanta.ts cli/src/artifacts/ && cp target/secret_santa_contract-SecretSanta.json cli/src/target/ && cd cli && yarn install && yarn build"
   },
   "dependencies": {
     "@aztec/accounts": "3.0.0-devnet.2",

@@ -12,7 +12,6 @@ import { Command } from "commander";
 import { AztecAddress } from "@aztec/aztec.js/addresses";
 import { Fr } from "@aztec/aztec.js/fields";
 import type { AztecNode } from "@aztec/aztec.js/node";
-import { poseidon2Hash } from "@aztec/foundation/crypto";
 import { deriveSigningKey } from "@aztec/stdlib/keys";
 import { TestWallet } from "@aztec/test-wallet/server";
 import { connectToContract, getGameInfo, PHASE, PHASE_NAMES } from "../services/contract.js";
@@ -135,13 +134,17 @@ export async function registerAsSender(
 
 /**
  * Claim as receiver (select someone else's slot).
+ *
+ * The contract uses check_nullifier_exists to cryptographically verify that
+ * the caller is NOT the sender of the target slot. This prevents self-selection
+ * attacks where a user tries to be their own Secret Santa.
  */
 export async function claimAsReceiver(
   wallet: TestWallet,
   callerAddress: AztecAddress,
   secretKey: Fr,
   node: AztecNode,
-  options: { game?: number; slot?: number; mySlot?: number }
+  options: { game?: number; slot?: number }
 ): Promise<void> {
   const contractAddress = getContractAddress();
   const contract = await connectToContract(
@@ -165,23 +168,10 @@ export async function claimAsReceiver(
     return;
   }
 
-  // Get the user's sender slot to prevent self-selection
-  let mySenderSlot = options.mySlot;
-  if (!mySenderSlot) {
-    mySenderSlot = await prompts.promptSlot("What slot did YOU register as sender? (to prevent self-selection):");
-  }
-
   // Get target slot
   let targetSlot = options.slot;
   if (!targetSlot) {
-    targetSlot = await prompts.promptSlot("Choose a slot to claim as receiver (must be different from yours!):");
-  }
-
-  // CRITICAL: Prevent self-selection
-  if (targetSlot === mySenderSlot) {
-    display.error("You cannot claim your own slot! That's not how Secret Santa works.");
-    display.info("You must select a DIFFERENT slot to receive a gift from someone else.");
-    return;
+    targetSlot = await prompts.promptSlot("Choose a slot to claim as receiver:");
   }
 
   // Check if slot is claimed (as sender)
@@ -218,25 +208,14 @@ export async function claimAsReceiver(
 
   display.step(`Claiming slot ${targetSlot} as receiver...`);
 
-  // The sender_nullifier is used to prove we're not claiming our own slot.
-  // The contract checks: my_potential_nullifier != sender_nullifier
-  //
-  // PRIVACY NOTE: In the current design, we need to provide a nullifier that
-  // differs from our own potential nullifier for this slot. We use a random
-  // value here. The contract will reject if we try to claim our own slot
-  // because our computed nullifier would match.
-  //
-  // A more robust design would have the nullifier tree publicly queryable
-  // so we could verify a slot is claimed without knowing WHO claimed it.
-  const senderNullifier = await poseidon2Hash([Fr.random()]);
-
+  // The contract uses check_nullifier_exists to verify we're NOT the sender
+  // of this slot. If we try to claim our own slot, the contract will reject.
   const paymentMethod = await getSponsoredPaymentMethod(wallet);
   await contract
     .withWallet(wallet)
     .methods.claim_as_receiver(
       BigInt(gameId),
       targetSlot,
-      senderNullifier,
       encryptedDeliveryData
     )
     .send({ from: callerAddress, fee: { paymentMethod } })
@@ -375,14 +354,12 @@ export function registerPlayerCommands(
     .description("Claim as receiver (select a slot to receive from)")
     .option("--game <id>", "Game ID", parseInt)
     .option("--slot <number>", "Slot number to claim", parseInt)
-    .option("--my-slot <number>", "Your sender slot (to prevent self-selection)", parseInt)
     .action(async (options) => {
       try {
         const { wallet, accountAddress, secretKey, node } = await getWallet();
         await claimAsReceiver(wallet, accountAddress, secretKey, node, {
           game: options.game,
           slot: options.slot,
-          mySlot: options.mySlot,
         });
       } catch (err: any) {
         display.error(err.message);
