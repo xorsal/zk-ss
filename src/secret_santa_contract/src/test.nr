@@ -1,23 +1,14 @@
 use crate::SecretSanta;
 use crate::types::{
-    NULLIFIER_DOMAIN_ENROLLMENT, NULLIFIER_DOMAIN_RECEIVER, NULLIFIER_DOMAIN_SENDER,
     PHASE_COMPLETED, PHASE_ENROLLMENT, PHASE_RECEIVER_CLAIM, PHASE_SENDER_REGISTRATION,
 };
 
 use dep::aztec::{
-    protocol_types::{
-        address::AztecAddress, hash::poseidon2_hash_with_separator, point::Point,
-        traits::ToField,
-    },
+    protocol_types::{address::AztecAddress, point::Point, traits::ToField},
     test::helpers::test_environment::TestEnvironment,
 };
 
 use std::embedded_curve_ops::{EmbeddedCurveScalar, fixed_base_scalar_mul};
-
-/// Helper to compute sender nullifier (same as in contract)
-fn compute_sender_nullifier(sender: AztecAddress, game_id: Field, slot: Field) -> Field {
-    poseidon2_hash_with_separator([sender.to_field(), game_id, slot], NULLIFIER_DOMAIN_SENDER)
-}
 
 /// Deploy the SecretSanta contract with a given admin
 unconstrained fn deploy_secret_santa(
@@ -173,44 +164,40 @@ unconstrained fn test_full_secret_santa_game() {
     // - Alice (owns slot 1) claims slot 2 (Bob's) -> Alice receives from Bob
     // - Bob (owns slot 2) claims slot 3 (Carol's) -> Bob receives from Carol
     // - Carol (owns slot 3) claims slot 1 (Alice's) -> Carol receives from Alice
+    //
+    // The contract uses check_nullifier_exists to verify each caller is NOT
+    // the sender of the slot they're claiming.
     // ============================================================
 
     // Alice claims slot 2 with encrypted delivery data
-    // She needs Bob's sender_nullifier to prove she's not Bob
-    let bob_sender_nullifier = compute_sender_nullifier(bob, game_id, 2);
     let alice_delivery_data: [Field; 4] = [0x1111, 0x2222, 0x3333, 0x4444];
     env.call_private(
         alice,
         SecretSanta::at(contract_address).claim_as_receiver(
             game_id,
             2, // target slot
-            bob_sender_nullifier,
             alice_delivery_data,
         ),
     );
 
     // Bob claims slot 3 with encrypted delivery data
-    let carol_sender_nullifier = compute_sender_nullifier(carol, game_id, 3);
     let bob_delivery_data: [Field; 4] = [0x5555, 0x6666, 0x7777, 0x8888];
     env.call_private(
         bob,
         SecretSanta::at(contract_address).claim_as_receiver(
             game_id,
             3, // target slot
-            carol_sender_nullifier,
             bob_delivery_data,
         ),
     );
 
     // Carol claims slot 1 with encrypted delivery data
-    let alice_sender_nullifier = compute_sender_nullifier(alice, game_id, 1);
     let carol_delivery_data: [Field; 4] = [0x9999, 0xaaaa, 0xbbbb, 0xcccc];
     env.call_private(
         carol,
         SecretSanta::at(contract_address).claim_as_receiver(
             game_id,
             1, // target slot
-            alice_sender_nullifier,
             carol_delivery_data,
         ),
     );
@@ -255,6 +242,7 @@ unconstrained fn test_full_secret_santa_game() {
 }
 
 /// Test that a participant cannot claim their own slot as receiver
+/// The contract uses check_nullifier_exists to detect self-selection attempts
 #[test(should_fail_with = "Cannot select yourself as sender")]
 unconstrained fn test_cannot_claim_own_slot() {
     let mut env = TestEnvironment::new();
@@ -297,8 +285,7 @@ unconstrained fn test_cannot_claim_own_slot() {
     env.call_public(alice, SecretSanta::at(contract_address).advance_phase(game_id));
 
     // Alice tries to claim her own slot (slot 1) - THIS SHOULD FAIL
-    // She provides HER OWN nullifier, which will match!
-    let alice_sender_nullifier = compute_sender_nullifier(alice, game_id, 1);
+    // The contract will compute her sender nullifier, find it EXISTS, and reject
     let delivery_data: [Field; 4] = [1, 2, 3, 4];
 
     env.call_private(
@@ -306,7 +293,6 @@ unconstrained fn test_cannot_claim_own_slot() {
         SecretSanta::at(contract_address).claim_as_receiver(
             game_id,
             1, // Alice trying to claim slot 1 (her own slot!)
-            alice_sender_nullifier,
             delivery_data,
         ),
     );

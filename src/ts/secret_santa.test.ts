@@ -160,20 +160,15 @@ describe("Secret Santa Contract E2E", () => {
     // Bob (slot 2) claims slot 3 (Carl's) with encrypted delivery data
     // Carl (slot 3) claims slot 1 (Alice's) with encrypted delivery data
     //
+    // The contract uses check_nullifier_exists to verify each caller is NOT
+    // the sender of the slot they're claiming.
+    //
     // In production, receivers would:
     // 1. Fetch the slot's encryption pubkey
     // 2. Encrypt their delivery address using that pubkey
     // 3. Pass the encrypted data to claim_as_receiver
     // ============================================================
     console.log("\n--- Step 7: Claiming as receivers with encrypted delivery data ---");
-
-    // Helper to compute sender nullifier
-    // In production, this would use poseidon2_hash_with_separator
-    const computeSenderNullifier = (sender: AztecAddress, gameId: bigint, slot: bigint): Fr => {
-      return Fr.fromString(
-        `0x${(BigInt(sender.toString()) ^ gameId ^ slot).toString(16).padStart(64, "0")}`
-      );
-    };
 
     // Alice claims slot 2 (Bob's slot), encrypts her delivery address for Bob
     // In production: would encrypt with bobEncryptionKey
@@ -183,8 +178,7 @@ describe("Secret Santa Contract E2E", () => {
       Fr.fromString("0x3333"),
       Fr.fromString("0x4444"),
     ];
-    const bobNullifier = computeSenderNullifier(bob, gameId, 2n);
-    await contract.withWallet(wallet).methods.claim_as_receiver(gameId, 2, bobNullifier, aliceDeliveryData).send({ from: alice }).wait();
+    await contract.withWallet(wallet).methods.claim_as_receiver(gameId, 2, aliceDeliveryData).send({ from: alice }).wait();
 
     // Bob claims slot 3 (Carl's slot), encrypts his delivery address for Carl
     const bobDeliveryData: [Fr, Fr, Fr, Fr] = [
@@ -193,8 +187,7 @@ describe("Secret Santa Contract E2E", () => {
       Fr.fromString("0x7777"),
       Fr.fromString("0x8888"),
     ];
-    const carlNullifier = computeSenderNullifier(carl, gameId, 3n);
-    await contract.withWallet(wallet).methods.claim_as_receiver(gameId, 3, carlNullifier, bobDeliveryData).send({ from: bob }).wait();
+    await contract.withWallet(wallet).methods.claim_as_receiver(gameId, 3, bobDeliveryData).send({ from: bob }).wait();
 
     // Carl claims slot 1 (Alice's slot), encrypts his delivery address for Alice
     const carlDeliveryData: [Fr, Fr, Fr, Fr] = [
@@ -203,8 +196,7 @@ describe("Secret Santa Contract E2E", () => {
       Fr.fromString("0xbbbb"),
       Fr.fromString("0xcccc"),
     ];
-    const aliceNullifier = computeSenderNullifier(alice, gameId, 1n);
-    await contract.withWallet(wallet).methods.claim_as_receiver(gameId, 1, aliceNullifier, carlDeliveryData).send({ from: carl }).wait();
+    await contract.withWallet(wallet).methods.claim_as_receiver(gameId, 1, carlDeliveryData).send({ from: carl }).wait();
 
     // Verify encrypted delivery data was stored
     const storedDelivery1 = await contract.methods.get_slot_delivery_data(gameId, 1n).simulate({ from: alice });

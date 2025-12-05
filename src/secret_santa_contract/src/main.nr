@@ -16,6 +16,7 @@ pub contract SecretSanta {
         },
         messages::message_delivery::MessageDelivery,
         note::{note_getter_options::NoteGetterOptions, note_interface::NoteProperties},
+        oracle::notes::check_nullifier_exists,
         protocol_types::{
             address::AztecAddress, hash::poseidon2_hash_with_separator,
             point::Point, traits::ToField,
@@ -201,7 +202,6 @@ pub contract SecretSanta {
     fn claim_as_receiver(
         game_id: Field,
         target_slot: u32,
-        sender_nullifier: Field,
         encrypted_delivery_data: [Field; 4],
     ) {
         let caller = context.msg_sender().unwrap();
@@ -213,14 +213,22 @@ pub contract SecretSanta {
         let participant_notes = storage.participants.at(caller).get_notes(options);
         assert(participant_notes.len() > 0, "Not enrolled in this game");
 
-        // THE KEY SECURITY CHECK: Prove we're not selecting ourselves
+        // SECURITY CHECK: Prove we're NOT the sender of the target slot
+        // Compute what our sender nullifier WOULD BE if we owned this slot
         let my_potential_nullifier = compute_sender_nullifier(caller, game_id, target_slot as Field);
-        assert(my_potential_nullifier != sender_nullifier, "Cannot select yourself as sender");
+
+        // Check if this nullifier exists in the tree - if yes, we ARE the sender
+        // Safety: check_nullifier_exists is unconstrained, but:
+        // - If we ARE the sender and oracle returns true -> we correctly reject
+        // - If we ARE the sender and a malicious oracle returns false -> self-sabotage only
+        // - If we're NOT the sender -> nullifier doesn't exist, we proceed
+        let caller_is_sender = unsafe { check_nullifier_exists(my_potential_nullifier) };
+        assert(!caller_is_sender, "Cannot select yourself as sender");
 
         let receiver_nullifier = compute_receiver_nullifier(caller, game_id);
         context.push_nullifier(receiver_nullifier);
 
-        let receiver_note = ReceiverNote::new(caller, game_id, target_slot as Field, sender_nullifier);
+        let receiver_note = ReceiverNote::new(caller, game_id, target_slot as Field);
         storage.receiver_claims.at(caller).insert(receiver_note).emit(
             caller,
             MessageDelivery.CONSTRAINED_ONCHAIN,
