@@ -10,13 +10,14 @@ use dep::aztec::macros::aztec;
 #[aztec]
 pub contract SecretSanta {
     use dep::aztec::{
+        event::event_emission::emit_event_in_public,
         macros::{
+            events::event,
             functions::{external, initializer, internal, view},
             storage::storage,
         },
         messages::message_delivery::MessageDelivery,
         note::{note_getter_options::NoteGetterOptions, note_interface::NoteProperties},
-        oracle::notes::check_nullifier_exists,
         protocol_types::{
             address::AztecAddress, hash::poseidon2_hash_with_separator,
             point::Point, traits::ToField,
@@ -30,6 +31,22 @@ pub contract SecretSanta {
         PHASE_COMPLETED, PHASE_ENROLLMENT, PHASE_RECEIVER_CLAIM, PHASE_SENDER_REGISTRATION,
         participant_note::ParticipantNote, receiver_note::ReceiverNote, sender_note::SenderNote,
     };
+
+    // ============================================================
+    // EVENTS
+    // ============================================================
+
+    #[event]
+    struct SlotClaimed {
+        game_id: Field,
+        slot: Field,
+    }
+
+    #[event]
+    struct ReceiverClaimed {
+        game_id: Field,
+        slot: Field,
+    }
 
     // ============================================================
     // STORAGE
@@ -46,10 +63,17 @@ pub contract SecretSanta {
         // Sender's encryption public key for each slot (public - anyone can see, but not WHO owns it)
         slot_encryption_keys: Map<Field, Map<Field, PublicMutable<Point, Context>, Context>, Context>,
         // Encrypted delivery data for each slot (receiver posts, only sender can decrypt)
-        slot_delivery_data: Map<Field, Map<Field, PublicMutable<[Field; 4], Context>, Context>, Context>,
+        // Increased to 8 fields for longer payloads (~111 bytes)
+        slot_delivery_data: Map<Field, Map<Field, PublicMutable<[Field; 8], Context>, Context>, Context>,
         participants: Map<AztecAddress, PrivateSet<ParticipantNote, Context>, Context>,
         sender_assignments: Map<AztecAddress, PrivateSet<SenderNote, Context>, Context>,
         receiver_claims: Map<AztecAddress, PrivateSet<ReceiverNote, Context>, Context>,
+        // Prevents multiple receivers claiming the same slot (ensures valid permutation)
+        slot_receiver_claimed: Map<Field, Map<Field, PublicMutable<bool, Context>, Context>, Context>,
+        // Tracks receiver claims to verify all participants claimed before completing
+        receiver_claim_counts: Map<Field, PublicMutable<u32, Context>, Context>,
+        // Tracks sender registrations to verify all participants registered before receiver phase
+        sender_registration_counts: Map<Field, PublicMutable<u32, Context>, Context>,
     }
 
     // ============================================================
@@ -91,6 +115,8 @@ pub contract SecretSanta {
 
     #[external("public")]
     fn create_game(min_participants: u32, max_participants_param: u32) -> pub Field {
+        let caller = context.msg_sender();
+        assert(caller.eq(storage.admin.read()), "Only admin can create games");
         assert(min_participants >= 3, "Need at least 3 participants");
         assert(max_participants_param >= min_participants, "Max must be >= min");
 
@@ -106,13 +132,32 @@ pub contract SecretSanta {
 
     #[external("public")]
     fn advance_phase(game_id: Field) {
+        let caller = context.msg_sender();
+        assert(caller.eq(storage.admin.read()), "Only admin can advance phases");
         let current_phase = storage.game_phases.at(game_id).read();
 
         if current_phase == PHASE_ENROLLMENT {
+            // Verify minimum participants before advancing
+            let count = storage.participant_counts.at(game_id).read();
+            assert(count >= 3, "Need at least 3 participants to start");
             storage.game_phases.at(game_id).write(PHASE_SENDER_REGISTRATION);
         } else if current_phase == PHASE_SENDER_REGISTRATION {
+            // Verify all participants have registered as senders
+            let participant_count = storage.participant_counts.at(game_id).read();
+            let sender_count = storage.sender_registration_counts.at(game_id).read();
+            assert(
+                sender_count == participant_count,
+                "Not all participants have registered as senders",
+            );
             storage.game_phases.at(game_id).write(PHASE_RECEIVER_CLAIM);
         } else if current_phase == PHASE_RECEIVER_CLAIM {
+            // Verify all slots have receivers before completing
+            let participant_count = storage.participant_counts.at(game_id).read();
+            let receiver_count = storage.receiver_claim_counts.at(game_id).read();
+            assert(
+                receiver_count == participant_count,
+                "Not all participants have claimed a receiver slot",
+            );
             storage.game_phases.at(game_id).write(PHASE_COMPLETED);
         } else {
             assert(false, "Cannot advance from current phase");
@@ -122,6 +167,9 @@ pub contract SecretSanta {
     #[internal]
     #[external("public")]
     fn _increment_participant_count(game_id: Field) {
+        let phase = storage.game_phases.at(game_id).read();
+        assert(phase == PHASE_ENROLLMENT, "Not in enrollment phase");
+
         let max_p = storage.max_participants.at(game_id).read();
         let current_count = storage.participant_counts.at(game_id).read();
         assert(current_count < max_p, "Game is full");
@@ -131,6 +179,9 @@ pub contract SecretSanta {
     #[internal]
     #[external("public")]
     fn _try_claim_slot(game_id: Field, slot: u32, encryption_key: Point) {
+        let phase = storage.game_phases.at(game_id).read();
+        assert(phase == PHASE_SENDER_REGISTRATION, "Not in sender registration phase");
+
         let participant_count = storage.participant_counts.at(game_id).read();
 
         assert(slot >= 1, "Slot must be >= 1");
@@ -143,14 +194,41 @@ pub contract SecretSanta {
         // Store sender's encryption public key for this slot
         // Anyone can see the key, but NOT who owns it
         storage.slot_encryption_keys.at(game_id).at(slot as Field).write(encryption_key);
+
+        let sender_count = storage.sender_registration_counts.at(game_id).read();
+        storage.sender_registration_counts.at(game_id).write(sender_count + 1);
+
+        // Emit public event for slot claim
+        emit_event_in_public(SlotClaimed { game_id, slot: slot as Field }, &mut context);
     }
 
     #[internal]
     #[external("public")]
-    fn _store_delivery_data(game_id: Field, slot: u32, encrypted_data: [Field; 4]) {
+    fn _store_delivery_data(game_id: Field, slot: u32, encrypted_data: [Field; 8]) {
         // Store encrypted delivery data for the slot
         // Only the sender (who owns the encryption private key) can decrypt
         storage.slot_delivery_data.at(game_id).at(slot as Field).write(encrypted_data);
+    }
+
+    #[internal]
+    #[external("public")]
+    fn _mark_receiver_claim(game_id: Field, slot: u32) {
+        let phase = storage.game_phases.at(game_id).read();
+        assert(phase == PHASE_RECEIVER_CLAIM, "Not in receiver claim phase");
+
+        let slot_has_sender = storage.slot_claimed.at(game_id).at(slot as Field).read();
+        assert(slot_has_sender, "Slot has no sender registered");
+
+        let already_claimed =
+            storage.slot_receiver_claimed.at(game_id).at(slot as Field).read();
+        assert(!already_claimed, "Slot already has a receiver");
+        storage.slot_receiver_claimed.at(game_id).at(slot as Field).write(true);
+
+        let count = storage.receiver_claim_counts.at(game_id).read();
+        storage.receiver_claim_counts.at(game_id).write(count + 1);
+
+        // Emit public event for receiver claim
+        emit_event_in_public(ReceiverClaimed { game_id, slot: slot as Field }, &mut context);
     }
 
     // ============================================================
@@ -202,7 +280,7 @@ pub contract SecretSanta {
     fn claim_as_receiver(
         game_id: Field,
         target_slot: u32,
-        encrypted_delivery_data: [Field; 4],
+        encrypted_delivery_data: [Field; 8],
     ) {
         let caller = context.msg_sender().unwrap();
 
@@ -213,17 +291,13 @@ pub contract SecretSanta {
         let participant_notes = storage.participants.at(caller).get_notes(options);
         assert(participant_notes.len() > 0, "Not enrolled in this game");
 
-        // SECURITY CHECK: Prove we're NOT the sender of the target slot
-        // Compute what our sender nullifier WOULD BE if we owned this slot
-        let my_potential_nullifier = compute_sender_nullifier(caller, game_id, target_slot as Field);
-
-        // Check if this nullifier exists in the tree - if yes, we ARE the sender
-        // Safety: check_nullifier_exists is unconstrained, but:
-        // - If we ARE the sender and oracle returns true -> we correctly reject
-        // - If we ARE the sender and a malicious oracle returns false -> self-sabotage only
-        // - If we're NOT the sender -> nullifier doesn't exist, we proceed
-        let caller_is_sender = unsafe { check_nullifier_exists(my_potential_nullifier) };
-        assert(!caller_is_sender, "Cannot select yourself as sender");
+        // SECURITY CHECK: Prevent self-selection via nullifier collision
+        // If caller IS the sender of target_slot, they already pushed this nullifier
+        // during register_as_sender. Pushing it again causes a collision and TX reverts.
+        // If caller is NOT the sender, this is a different nullifier (different address)
+        // so no collision occurs.
+        let self_selection_check = compute_sender_nullifier(caller, game_id, target_slot as Field);
+        context.push_nullifier(self_selection_check);
 
         let receiver_nullifier = compute_receiver_nullifier(caller, game_id);
         context.push_nullifier(receiver_nullifier);
@@ -233,6 +307,10 @@ pub contract SecretSanta {
             caller,
             MessageDelivery.CONSTRAINED_ONCHAIN,
         );
+
+        SecretSanta::at(context.this_address())
+            ._mark_receiver_claim(game_id, target_slot)
+            .enqueue(&mut context);
 
         // Store encrypted delivery data for the sender
         // Receiver encrypts off-chain using slot's public key, only sender can decrypt
@@ -273,8 +351,20 @@ pub contract SecretSanta {
 
     /// Get the encrypted delivery data for a slot (used by senders to retrieve their receiver's info)
     #[external("utility")]
-    unconstrained fn get_slot_delivery_data(game_id: Field, slot: Field) -> [Field; 4] {
+    unconstrained fn get_slot_delivery_data(game_id: Field, slot: Field) -> [Field; 8] {
         storage.slot_delivery_data.at(game_id).at(slot).read()
+    }
+
+    /// Check if a slot has been claimed by a receiver
+    #[external("utility")]
+    unconstrained fn is_slot_receiver_claimed(game_id: Field, slot: Field) -> bool {
+        storage.slot_receiver_claimed.at(game_id).at(slot).read()
+    }
+
+    /// Get the count of receiver claims for a game
+    #[external("utility")]
+    unconstrained fn get_receiver_claim_count(game_id: Field) -> u32 {
+        storage.receiver_claim_counts.at(game_id).read()
     }
 
     /// Get max participants for a game

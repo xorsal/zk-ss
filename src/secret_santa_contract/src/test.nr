@@ -165,12 +165,12 @@ unconstrained fn test_full_secret_santa_game() {
     // - Bob (owns slot 2) claims slot 3 (Carol's) -> Bob receives from Carol
     // - Carol (owns slot 3) claims slot 1 (Alice's) -> Carol receives from Alice
     //
-    // The contract uses check_nullifier_exists to verify each caller is NOT
-    // the sender of the slot they're claiming.
+    // The contract verifies each caller is NOT the sender of the slot they're
+    // claiming using constrained public verification (Issue 1 fix).
     // ============================================================
 
-    // Alice claims slot 2 with encrypted delivery data
-    let alice_delivery_data: [Field; 4] = [0x1111, 0x2222, 0x3333, 0x4444];
+    // Alice claims slot 2 with encrypted delivery data (8 fields for longer payloads)
+    let alice_delivery_data: [Field; 8] = [0x1111, 0x2222, 0x3333, 0x4444, 0, 0, 0, 0];
     env.call_private(
         alice,
         SecretSanta::at(contract_address).claim_as_receiver(
@@ -181,7 +181,7 @@ unconstrained fn test_full_secret_santa_game() {
     );
 
     // Bob claims slot 3 with encrypted delivery data
-    let bob_delivery_data: [Field; 4] = [0x5555, 0x6666, 0x7777, 0x8888];
+    let bob_delivery_data: [Field; 8] = [0x5555, 0x6666, 0x7777, 0x8888, 0, 0, 0, 0];
     env.call_private(
         bob,
         SecretSanta::at(contract_address).claim_as_receiver(
@@ -192,7 +192,7 @@ unconstrained fn test_full_secret_santa_game() {
     );
 
     // Carol claims slot 1 with encrypted delivery data
-    let carol_delivery_data: [Field; 4] = [0x9999, 0xaaaa, 0xbbbb, 0xcccc];
+    let carol_delivery_data: [Field; 8] = [0x9999, 0xaaaa, 0xbbbb, 0xcccc, 0, 0, 0, 0];
     env.call_private(
         carol,
         SecretSanta::at(contract_address).claim_as_receiver(
@@ -242,8 +242,9 @@ unconstrained fn test_full_secret_santa_game() {
 }
 
 /// Test that a participant cannot claim their own slot as receiver
-/// The contract uses check_nullifier_exists to detect self-selection attempts
-#[test(should_fail_with = "Cannot select yourself as sender")]
+/// Self-selection is prevented via nullifier collision - if you try to claim
+/// your own slot, you push the same nullifier twice, causing a collision.
+#[test(should_fail)]
 unconstrained fn test_cannot_claim_own_slot() {
     let mut env = TestEnvironment::new();
 
@@ -285,8 +286,9 @@ unconstrained fn test_cannot_claim_own_slot() {
     env.call_public(alice, SecretSanta::at(contract_address).advance_phase(game_id));
 
     // Alice tries to claim her own slot (slot 1) - THIS SHOULD FAIL
-    // The contract will compute her sender nullifier, find it EXISTS, and reject
-    let delivery_data: [Field; 4] = [1, 2, 3, 4];
+    // Alice already pushed sender_nullifier = hash(Alice, game_id, 1) during registration.
+    // When she tries to claim slot 1, she pushes the same nullifier again causing collision
+    let delivery_data: [Field; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
 
     env.call_private(
         alice,
