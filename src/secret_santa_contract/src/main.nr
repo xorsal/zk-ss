@@ -115,7 +115,7 @@ pub contract SecretSanta {
 
     #[external("public")]
     fn create_game(min_participants: u32, max_participants_param: u32) -> pub Field {
-        let caller = context.msg_sender();
+        let caller = context.msg_sender().unwrap();
         assert(caller.eq(storage.admin.read()), "Only admin can create games");
         assert(min_participants >= 3, "Need at least 3 participants");
         assert(max_participants_param >= min_participants, "Max must be >= min");
@@ -132,7 +132,7 @@ pub contract SecretSanta {
 
     #[external("public")]
     fn advance_phase(game_id: Field) {
-        let caller = context.msg_sender();
+        let caller = context.msg_sender().unwrap();
         assert(caller.eq(storage.admin.read()), "Only admin can advance phases");
         let current_phase = storage.game_phases.at(game_id).read();
 
