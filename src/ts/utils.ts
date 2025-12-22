@@ -20,7 +20,7 @@ const pxeVersion = parseInt(PXE_VERSION);
 const l1Contracts = await node.getL1ContractAddresses();
 const config = getPXEConfig();
 const fullConfig = { ...config, l1Contracts };
-fullConfig.proverEnabled = false;
+fullConfig.proverEnabled = true;
 
 /**
  * Setup the PXE and the store

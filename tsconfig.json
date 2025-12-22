@@ -10,6 +10,6 @@
     "declaration": true,
     "outDir": "./dist"
   },
-  "include": ["src/**/*", "scripts/**/*", "vitest.setup.ts"],
+  "include": ["src/**/*", "scripts/**/*", "artifacts/**/*", "vitest.setup.ts"],
   "exclude": ["node_modules", "dist"]
 }
