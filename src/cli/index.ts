@@ -120,8 +120,34 @@ async function getAdminWallet(): Promise<{ wallet: TestWallet; accountAddress: A
 /**
  * Setup command - configure contract address.
  */
-async function setup(options: { admin?: string; connect?: string }): Promise<void> {
+async function setup(options: { admin?: string; connect?: string; fullDeploy?: boolean }): Promise<void> {
   display.header("ZK Secret Santa Setup");
+
+  // Handle --full-deploy: use fixed passphrase and deploy with that account as admin
+  if (options.fullDeploy) {
+    const adminPassphrase = "secret-santa-admin";
+    globalPassphrase = adminPassphrase;
+
+    display.step("Creating admin account from passphrase...");
+    const { wallet, accountAddress, node } = await getWallet();
+
+    // Show full untruncated address
+    display.divider();
+    display.keyValue("Admin Address", accountAddress.toString());
+    display.divider();
+
+    display.step("Deploying SecretSanta contract...");
+    const contract = await deployContract(wallet, accountAddress);
+    const contractAddress = contract.address.toString();
+
+    updateConfig({ contractAddress });
+
+    display.divider();
+    display.keyValue("Contract Address", contractAddress);
+    display.divider();
+    display.success("Full deploy complete! Contract deployed and saved to config.");
+    return;
+  }
 
   // Get wallet first
   const { wallet, accountAddress, node } = await getWallet();
@@ -242,6 +268,7 @@ program
   .description("Configure contract (deploy new or connect to existing)")
   .option("--admin <address>", "Deploy new contract with this admin address")
   .option("--connect <address>", "Connect to existing contract at address")
+  .option("--full-deploy", "Create admin account and deploy contract (uses passphrase 'secret-santa-admin')")
   .action(async (options) => {
     try {
       await setup(options);
