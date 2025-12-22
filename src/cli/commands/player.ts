@@ -20,6 +20,44 @@ import { encryptDeliveryData, decryptDeliveryData, isEncryptedDataEmpty } from "
 import { loadConfig, getContractAddress } from "../services/config.js";
 import * as display from "../utils/display.js";
 import * as prompts from "../utils/prompts.js";
+import type { SecretSantaContract } from "../../../artifacts/SecretSanta.js";
+
+const POLL_INTERVAL_MS = 12000; // 12 seconds
+
+/**
+ * Poll for phase change. Returns when phase changes from currentPhase.
+ */
+async function waitForPhaseChange(
+  contract: SecretSantaContract,
+  gameId: bigint,
+  currentPhase: number,
+  callerAddress: AztecAddress
+): Promise<number> {
+  display.divider();
+  display.info(`Waiting for phase change... (polling every ${POLL_INTERVAL_MS / 1000}s, Ctrl+C to exit)`);
+
+  let lastPhase = currentPhase;
+
+  while (true) {
+    await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
+
+    try {
+      const { phase, phaseName } = await getGameInfo(contract, gameId, callerAddress);
+
+      if (phase !== lastPhase) {
+        display.divider();
+        display.success(`Phase changed to: ${phaseName}`);
+        return phase;
+      }
+
+      // Show a dot to indicate we're still polling
+      process.stdout.write(".");
+    } catch (err) {
+      // Ignore errors during polling, just keep trying
+      process.stdout.write("x");
+    }
+  }
+}
 
 /**
  * Enroll in a game.
@@ -30,7 +68,7 @@ export async function enroll(
   secretKey: Fr,
   node: AztecNode,
   options: { game?: number }
-): Promise<void> {
+): Promise<{ contract: SecretSantaContract; gameId: number } | void> {
   const contractAddress = getContractAddress();
   const contract = await connectToContract(
     wallet,
@@ -63,7 +101,14 @@ export async function enroll(
     .wait();
 
   display.success(`Enrolled in game #${gameId}!`);
-  display.info("Wait for the admin to advance to Sender Registration phase.");
+
+  // Wait for phase change
+  const newPhase = await waitForPhaseChange(contract, BigInt(gameId), PHASE.ENROLLMENT, callerAddress);
+
+  if (newPhase === PHASE.SENDER_REGISTRATION) {
+    display.info("You can now register as a sender. Pick a slot number.");
+    return { contract, gameId };
+  }
 }
 
 /**
@@ -75,7 +120,7 @@ export async function registerAsSender(
   secretKey: Fr,
   node: AztecNode,
   options: { game?: number; slot?: number }
-): Promise<void> {
+): Promise<{ contract: SecretSantaContract; gameId: number; senderSlot: number } | void> {
   const contractAddress = getContractAddress();
   const contract = await connectToContract(
     wallet,
@@ -129,7 +174,14 @@ export async function registerAsSender(
 
   display.success(`Registered as sender for slot ${slot}!`);
   display.keyValue("Your slot", slot.toString());
-  display.info("Your encryption key has been published. Wait for Receiver Claim phase.");
+
+  // Wait for phase change
+  const newPhase = await waitForPhaseChange(contract, BigInt(gameId), PHASE.SENDER_REGISTRATION, callerAddress);
+
+  if (newPhase === PHASE.RECEIVER_CLAIM) {
+    display.info("You can now claim as a receiver. Pick a DIFFERENT slot (not your own).");
+    return { contract, gameId, senderSlot: slot };
+  }
 }
 
 /**
@@ -143,8 +195,8 @@ export async function claimAsReceiver(
   callerAddress: AztecAddress,
   secretKey: Fr,
   node: AztecNode,
-  options: { game?: number; slot?: number }
-): Promise<void> {
+  options: { game?: number; slot?: number; senderSlot?: number }
+): Promise<{ contract: SecretSantaContract; gameId: number; senderSlot: number } | void> {
   const contractAddress = getContractAddress();
   const contract = await connectToContract(
     wallet,
@@ -223,6 +275,20 @@ export async function claimAsReceiver(
   display.success(`Claimed slot ${targetSlot} as receiver!`);
   display.info("Your encrypted delivery address has been stored.");
   display.info("The sender of slot " + targetSlot + " will send you a gift!");
+
+  // Get sender slot (from options or prompt)
+  let senderSlot = options.senderSlot;
+  if (!senderSlot) {
+    senderSlot = await prompts.promptSlot("What was YOUR sender slot? (to view delivery later):");
+  }
+
+  // Wait for phase change
+  const newPhase = await waitForPhaseChange(contract, BigInt(gameId), PHASE.RECEIVER_CLAIM, callerAddress);
+
+  if (newPhase === PHASE.COMPLETED) {
+    display.info("Game complete! You can now view your recipient's delivery address.");
+    return { contract, gameId, senderSlot };
+  }
 }
 
 /**
@@ -332,7 +398,32 @@ export function registerPlayerCommands(
     .action(async (options) => {
       try {
         const { wallet, accountAddress, secretKey, node } = await getWallet();
-        await enroll(wallet, accountAddress, secretKey, node, options);
+        const result = await enroll(wallet, accountAddress, secretKey, node, options);
+
+        // Chain to register if phase changed
+        if (result) {
+          const slot = await prompts.promptSlot("Choose a slot number to claim:");
+          const registerResult = await registerAsSenderInternal(
+            wallet, accountAddress, secretKey, result.contract, result.gameId, slot
+          );
+
+          // Chain to claim if phase changed
+          if (registerResult) {
+            const targetSlot = await prompts.promptSlot("Choose a slot to claim as receiver (not your own):");
+            const claimResult = await claimAsReceiverInternal(
+              wallet, accountAddress, secretKey, registerResult.contract,
+              registerResult.gameId, targetSlot, registerResult.senderSlot
+            );
+
+            // Chain to delivery if phase changed
+            if (claimResult) {
+              await viewDeliveryData(wallet, accountAddress, secretKey, node, {
+                game: claimResult.gameId,
+                slot: claimResult.senderSlot,
+              });
+            }
+          }
+        }
       } catch (err: any) {
         display.error(err.message);
         process.exit(1);
@@ -347,7 +438,24 @@ export function registerPlayerCommands(
     .action(async (options) => {
       try {
         const { wallet, accountAddress, secretKey, node } = await getWallet();
-        await registerAsSender(wallet, accountAddress, secretKey, node, options);
+        const result = await registerAsSender(wallet, accountAddress, secretKey, node, options);
+
+        // Chain to claim if phase changed
+        if (result) {
+          const targetSlot = await prompts.promptSlot("Choose a slot to claim as receiver (not your own):");
+          const claimResult = await claimAsReceiverInternal(
+            wallet, accountAddress, secretKey, result.contract,
+            result.gameId, targetSlot, result.senderSlot
+          );
+
+          // Chain to delivery if phase changed
+          if (claimResult) {
+            await viewDeliveryData(wallet, accountAddress, secretKey, node, {
+              game: claimResult.gameId,
+              slot: claimResult.senderSlot,
+            });
+          }
+        }
       } catch (err: any) {
         display.error(err.message);
         process.exit(1);
@@ -359,13 +467,23 @@ export function registerPlayerCommands(
     .description("Claim as receiver (select a slot to receive from)")
     .option("--game <id>", "Game ID", parseInt)
     .option("--slot <number>", "Slot number to claim", parseInt)
+    .option("--sender-slot <number>", "Your sender slot number", parseInt)
     .action(async (options) => {
       try {
         const { wallet, accountAddress, secretKey, node } = await getWallet();
-        await claimAsReceiver(wallet, accountAddress, secretKey, node, {
+        const result = await claimAsReceiver(wallet, accountAddress, secretKey, node, {
           game: options.game,
           slot: options.slot,
+          senderSlot: options.senderSlot,
         });
+
+        // Chain to delivery if phase changed
+        if (result) {
+          await viewDeliveryData(wallet, accountAddress, secretKey, node, {
+            game: result.gameId,
+            slot: result.senderSlot,
+          });
+        }
       } catch (err: any) {
         display.error(err.message);
         process.exit(1);
@@ -386,4 +504,119 @@ export function registerPlayerCommands(
         process.exit(1);
       }
     });
+}
+
+/**
+ * Internal register function that reuses existing contract connection.
+ */
+async function registerAsSenderInternal(
+  wallet: TestWallet,
+  callerAddress: AztecAddress,
+  secretKey: Fr,
+  contract: SecretSantaContract,
+  gameId: number,
+  slot: number
+): Promise<{ contract: SecretSantaContract; gameId: number; senderSlot: number } | void> {
+  // Check if slot is already claimed
+  const isClaimed = await contract.methods
+    .is_slot_claimed(BigInt(gameId), slot)
+    .simulate({ from: callerAddress });
+
+  if (isClaimed) {
+    display.error(`Slot ${slot} is already claimed. Choose a different slot.`);
+    return;
+  }
+
+  // Get encryption public key from secret key
+  display.step("Deriving encryption key...");
+  const encryptionKey = await getEncryptionPublicKey(secretKey);
+
+  display.step(`Registering as sender for slot ${slot}...`);
+
+  const paymentMethod = await getSponsoredPaymentMethod(wallet);
+  await contract
+    .withWallet(wallet)
+    .methods.register_as_sender(BigInt(gameId), slot, encryptionKey)
+    .send({ from: callerAddress, fee: { paymentMethod } })
+    .wait();
+
+  display.success(`Registered as sender for slot ${slot}!`);
+  display.keyValue("Your slot", slot.toString());
+
+  // Wait for phase change
+  const newPhase = await waitForPhaseChange(contract, BigInt(gameId), PHASE.SENDER_REGISTRATION, callerAddress);
+
+  if (newPhase === PHASE.RECEIVER_CLAIM) {
+    display.info("You can now claim as a receiver. Pick a DIFFERENT slot (not your own).");
+    return { contract, gameId, senderSlot: slot };
+  }
+}
+
+/**
+ * Internal claim function that reuses existing contract connection.
+ */
+async function claimAsReceiverInternal(
+  wallet: TestWallet,
+  callerAddress: AztecAddress,
+  secretKey: Fr,
+  contract: SecretSantaContract,
+  gameId: number,
+  targetSlot: number,
+  senderSlot: number
+): Promise<{ contract: SecretSantaContract; gameId: number; senderSlot: number } | void> {
+  // Check if slot is claimed (as sender)
+  const isClaimed = await contract.methods
+    .is_slot_claimed(BigInt(gameId), targetSlot)
+    .simulate({ from: callerAddress });
+
+  if (!isClaimed) {
+    display.error(`Slot ${targetSlot} has no sender. Choose a different slot.`);
+    return;
+  }
+
+  // Get sender's encryption key for the slot
+  const senderKey = await contract.methods
+    .get_slot_encryption_key(BigInt(gameId), BigInt(targetSlot))
+    .simulate({ from: callerAddress });
+
+  display.info(`Slot ${targetSlot} sender's public key: ${display.formatAddress(senderKey.x.toString())}`);
+
+  // Get delivery address from user
+  const deliveryAddress = await prompts.promptDeliveryAddress();
+
+  display.step("Encrypting delivery address with sender's public key...");
+
+  let encryptedDeliveryData: [Fr, Fr, Fr, Fr, Fr, Fr, Fr, Fr];
+  try {
+    encryptedDeliveryData = await encryptDeliveryData(deliveryAddress, senderKey);
+    display.success("Delivery address encrypted!");
+  } catch (err: any) {
+    display.error(`Encryption failed: ${err.message}`);
+    return;
+  }
+
+  display.step(`Claiming slot ${targetSlot} as receiver...`);
+
+  const paymentMethod = await getSponsoredPaymentMethod(wallet);
+  await contract
+    .withWallet(wallet)
+    .methods.claim_as_receiver(
+      BigInt(gameId),
+      targetSlot,
+      encryptedDeliveryData
+    )
+    .send({ from: callerAddress, fee: { paymentMethod } })
+    .wait();
+
+  display.success(`Claimed slot ${targetSlot} as receiver!`);
+  display.info("Your encrypted delivery address has been stored.");
+  display.info("The sender of slot " + targetSlot + " will send you a gift!");
+
+  // Wait for phase change
+  const newPhase = await waitForPhaseChange(contract, BigInt(gameId), PHASE.RECEIVER_CLAIM, callerAddress);
+
+  if (newPhase === PHASE.COMPLETED) {
+    display.info("Game complete! You can now view your recipient's delivery address.");
+    return { contract, gameId, senderSlot };
+  }
 }
