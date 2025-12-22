@@ -154,6 +154,22 @@ export async function promptNodeUrl(defaultValue: string = "http://localhost:808
 }
 
 /**
+ * Prompt for admin address.
+ */
+export async function promptAdminAddress(defaultValue?: string): Promise<string> {
+  return await input({
+    message: "Enter admin address:",
+    default: defaultValue,
+    validate: (value) => {
+      if (!value.startsWith("0x") || value.length !== 66) {
+        return "Invalid address format. Expected 0x followed by 64 hex characters.";
+      }
+      return true;
+    },
+  });
+}
+
+/**
  * Prompt to select a game phase action.
  */
 export async function promptPhaseAction(): Promise<string> {

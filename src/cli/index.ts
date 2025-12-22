@@ -24,6 +24,7 @@ import {
 } from "./services/config.js";
 import { registerAdminCommands, viewStatus } from "./commands/admin.js";
 import { registerPlayerCommands } from "./commands/player.js";
+import { registerWatchCommand } from "./commands/watch.js";
 import * as display from "./utils/display.js";
 import * as prompts from "./utils/prompts.js";
 
@@ -61,8 +62,12 @@ async function initTestWallet(): Promise<{ wallet: TestWallet; node: AztecNode }
     process.exit(1);
   }
 
-  // Create TestWallet
-  testWallet = await TestWallet.create(node);
+  // Create TestWallet with prover enabled for devnet/next-devnet
+  const proverEnabled = network !== "sandbox";
+  if (proverEnabled) {
+    display.info("Proving enabled");
+  }
+  testWallet = await TestWallet.create(node, { proverEnabled });
   aztecNode = node;
 
   display.success(`Connected to ${network}`);
@@ -115,14 +120,17 @@ async function getAdminWallet(): Promise<{ wallet: TestWallet; accountAddress: A
 /**
  * Setup command - configure contract address.
  */
-async function setup(): Promise<void> {
+async function setup(options: { admin?: string; connect?: string }): Promise<void> {
   display.header("ZK Secret Santa Setup");
 
   // Get wallet first
   const { wallet, accountAddress, node } = await getWallet();
 
-  // Check if we already have a contract
-  if (hasContractAddress()) {
+  // Determine action: --admin implies deploy, --connect implies connect, otherwise prompt
+  const nonInteractive = options.admin || options.connect;
+
+  // Check if we already have a contract (skip prompt if non-interactive)
+  if (hasContractAddress() && !nonInteractive) {
     const config = loadConfig();
     display.info(`Current contract: ${config.contractAddress}`);
 
@@ -132,13 +140,30 @@ async function setup(): Promise<void> {
     }
   }
 
-  // Ask what to do
-  const action = await prompts.promptContractSetup();
+  // Determine action
+  let action: "deploy" | "connect";
+  if (options.admin) {
+    action = "deploy";
+  } else if (options.connect) {
+    action = "connect";
+  } else {
+    action = await prompts.promptContractSetup();
+  }
 
   if (action === "deploy") {
-    display.step("Deploying new SecretSanta contract...");
+    // Get admin address: from option or prompt
+    let adminAddress: AztecAddress;
+    if (options.admin) {
+      adminAddress = AztecAddress.fromString(options.admin);
+    } else {
+      const adminInput = await prompts.promptAdminAddress(accountAddress.toString());
+      adminAddress = AztecAddress.fromString(adminInput);
+    }
 
-    const contract = await deployContract(wallet, accountAddress);
+    display.step("Deploying new SecretSanta contract...");
+    display.keyValue("Admin", adminAddress.toString());
+
+    const contract = await deployContract(wallet, adminAddress);
     const contractAddress = contract.address.toString();
 
     updateConfig({ contractAddress });
@@ -146,7 +171,8 @@ async function setup(): Promise<void> {
     display.contractInfo(contractAddress, true);
     display.success("Contract deployed and saved to config!");
   } else {
-    const contractAddress = await prompts.promptContractAddress();
+    // Get contract address from --connect flag or prompt
+    const contractAddress = options.connect || await prompts.promptContractAddress();
 
     // Verify contract exists
     try {
@@ -194,6 +220,7 @@ program
   .version(VERSION)
   .option("--sandbox", "Connect to local sandbox (localhost:8080)")
   .option("--devnet", "Connect to Aztec devnet (devnet.aztec-labs.com)")
+  .option("--next-devnet", "Connect to Aztec next-devnet (next.devnet.aztec-labs.com)")
   .option("-p, --passphrase <passphrase>", "Passphrase for wallet (avoids interactive prompt)")
   .hook("preAction", (thisCommand) => {
     const opts = thisCommand.opts();
@@ -201,6 +228,8 @@ program
       setNetwork("sandbox");
     } else if (opts.devnet) {
       setNetwork("devnet");
+    } else if (opts.nextDevnet) {
+      setNetwork("next-devnet");
     }
     if (opts.passphrase) {
       globalPassphrase = opts.passphrase;
@@ -211,9 +240,11 @@ program
 program
   .command("setup")
   .description("Configure contract (deploy new or connect to existing)")
-  .action(async () => {
+  .option("--admin <address>", "Deploy new contract with this admin address")
+  .option("--connect <address>", "Connect to existing contract at address")
+  .action(async (options) => {
     try {
-      await setup();
+      await setup(options);
     } catch (err: any) {
       display.error(err.message);
       process.exit(1);
@@ -238,6 +269,7 @@ program
   .command("status")
   .description("View current game status")
   .option("--game <id>", "Game ID", parseInt)
+  .option("--events", "Use events for faster slot discovery")
   .action(async (options) => {
     try {
       const { wallet, accountAddress, node } = await getAdminWallet();
@@ -253,6 +285,9 @@ registerAdminCommands(program, getAdminWallet);
 
 // Register player commands
 registerPlayerCommands(program, getWallet);
+
+// Register watch command
+registerWatchCommand(program, getAdminWallet);
 
 // Parse and execute
 program.parse();

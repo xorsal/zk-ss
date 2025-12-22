@@ -135,9 +135,8 @@ export async function registerAsSender(
 /**
  * Claim as receiver (select someone else's slot).
  *
- * The contract uses check_nullifier_exists to cryptographically verify that
- * the caller is NOT the sender of the target slot. This prevents self-selection
- * attacks where a user tries to be their own Secret Santa.
+ * Self-selection is prevented via nullifier collision: if you try to claim your
+ * own slot, you push the same nullifier twice and the transaction reverts.
  */
 export async function claimAsReceiver(
   wallet: TestWallet,
@@ -195,9 +194,10 @@ export async function claimAsReceiver(
   const deliveryAddress = await prompts.promptDeliveryAddress();
 
   // Encrypt delivery address using the sender's public key (real ECIES encryption)
+  // Issue 5 fix: Now supports up to 111 bytes (8 field elements)
   display.step("Encrypting delivery address with sender's public key...");
 
-  let encryptedDeliveryData: [Fr, Fr, Fr, Fr];
+  let encryptedDeliveryData: [Fr, Fr, Fr, Fr, Fr, Fr, Fr, Fr];
   try {
     encryptedDeliveryData = await encryptDeliveryData(deliveryAddress, senderKey);
     display.success("Delivery address encrypted!");
@@ -208,8 +208,7 @@ export async function claimAsReceiver(
 
   display.step(`Claiming slot ${targetSlot} as receiver...`);
 
-  // The contract uses check_nullifier_exists to verify we're NOT the sender
-  // of this slot. If we try to claim our own slot, the contract will reject.
+  // If we try to claim our own slot, the transaction will revert due to nullifier collision
   const paymentMethod = await getSponsoredPaymentMethod(wallet);
   await contract
     .withWallet(wallet)
@@ -271,7 +270,11 @@ export async function viewDeliveryData(
       .get_slot_delivery_data(BigInt(gameId), BigInt(slot))
       .simulate({ from: callerAddress });
 
-    if (isEncryptedDataEmpty([deliveryData[0], deliveryData[1], deliveryData[2], deliveryData[3]])) {
+    // Issue 5 fix: Now using 8 fields instead of 4
+    if (isEncryptedDataEmpty([
+      deliveryData[0], deliveryData[1], deliveryData[2], deliveryData[3],
+      deliveryData[4], deliveryData[5], deliveryData[6], deliveryData[7]
+    ])) {
       display.warn(`No delivery data found for slot ${slot}.`);
       display.info("The receiver may not have claimed this slot yet.");
       return;
@@ -280,8 +283,7 @@ export async function viewDeliveryData(
     display.header("Encrypted Delivery Data");
     display.keyValue("Ephemeral PubKey X", deliveryData[0].toString().slice(0, 20) + "...");
     display.keyValue("Ephemeral PubKey Y", deliveryData[1].toString().slice(0, 20) + "...");
-    display.keyValue("Ciphertext Part 1", deliveryData[2].toString().slice(0, 20) + "...");
-    display.keyValue("Ciphertext Part 2", deliveryData[3].toString().slice(0, 20) + "...");
+    display.keyValue("Ciphertext (6 fields)", "...");
 
     // Decrypt using the sender's private key (derived from the passphrase secret)
     display.step("Decrypting with your private key...");
@@ -292,7 +294,10 @@ export async function viewDeliveryData(
       const encryptionPrivateKey = deriveSigningKey(secretKey);
 
       const decryptedAddress = await decryptDeliveryData(
-        [deliveryData[0], deliveryData[1], deliveryData[2], deliveryData[3]],
+        [
+          deliveryData[0], deliveryData[1], deliveryData[2], deliveryData[3],
+          deliveryData[4], deliveryData[5], deliveryData[6], deliveryData[7]
+        ],
         encryptionPrivateKey
       );
 

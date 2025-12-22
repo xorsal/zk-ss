@@ -11,7 +11,7 @@ import { homedir } from "os";
 
 export interface CLIConfig {
   nodeUrl: string;
-  network: "sandbox" | "devnet" | "custom";
+  network: "sandbox" | "devnet" | "next-devnet" | "custom";
   contractAddress?: string;
   currentGameId?: number;
 }
@@ -20,6 +20,7 @@ export interface CLIConfig {
 export const NETWORK_URLS = {
   sandbox: "http://localhost:8080",
   devnet: "https://devnet.aztec-labs.com",
+  "next-devnet": "https://next.devnet.aztec-labs.com",
 } as const;
 
 const DEFAULT_CONFIG: CLIConfig = {
@@ -127,9 +128,9 @@ export function getNodeUrl(): string {
 }
 
 /**
- * Set the network (sandbox or devnet).
+ * Set the network (sandbox, devnet, or next-devnet).
  */
-export function setNetwork(network: "sandbox" | "devnet"): CLIConfig {
+export function setNetwork(network: "sandbox" | "devnet" | "next-devnet"): CLIConfig {
   return updateConfig({
     network,
     nodeUrl: NETWORK_URLS[network],
