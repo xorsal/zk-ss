@@ -155,3 +155,43 @@ export function spinnerDone(success: boolean = true): void {
     console.log(chalk.red("✗ ") + "Failed!".padEnd(50));
   }
 }
+
+/**
+ * Print a timestamp for real-time updates.
+ */
+export function timestamp(): string {
+  return new Date().toLocaleTimeString();
+}
+
+/**
+ * Print an event notification.
+ */
+export function eventNotification(eventType: string, details: string): void {
+  const now = timestamp();
+  console.log(chalk.yellow(`[${now}] `) + chalk.cyan(eventType) + `: ${details}`);
+}
+
+/**
+ * Print slot status with receiver info.
+ */
+export function slotStatusExtended(
+  slot: number,
+  isClaimed: boolean,
+  hasReceiver: boolean
+): void {
+  const senderIcon = isClaimed ? chalk.green("●") : chalk.gray("○");
+  const receiverIcon = hasReceiver ? chalk.blue(" → ✓") : "";
+  const senderStatus = isClaimed ? "Sender registered" : "Available";
+  const receiverStatus = hasReceiver ? " (receiver claimed)" : "";
+  console.log(`  Slot ${slot}: ${senderIcon} ${senderStatus}${receiverIcon}${receiverStatus}`);
+}
+
+/**
+ * Print watch mode header.
+ */
+export function watchHeader(gameId: number): void {
+  console.log("");
+  console.log(chalk.bold.bgBlue.white(` 👀 Watching Game #${gameId} `));
+  console.log(chalk.gray("Press Ctrl+C to stop"));
+  console.log("");
+}

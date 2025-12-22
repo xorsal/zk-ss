@@ -18,6 +18,10 @@ import {
   PHASE,
   PHASE_NAMES,
 } from "../services/contract.js";
+import {
+  getClaimedSlotsFromEvents,
+  getReceiverClaimedSlotsFromEvents,
+} from "../services/events.js";
 import { getSponsoredPaymentMethod } from "../services/wallet.js";
 import {
   loadConfig,
@@ -140,7 +144,7 @@ export async function viewStatus(
   wallet: TestWallet,
   callerAddress: AztecAddress,
   node: AztecNode,
-  options: { game?: number }
+  options: { game?: number; events?: boolean }
 ): Promise<void> {
   const contractAddress = getContractAddress();
   const contract = await connectToContract(
@@ -170,31 +174,71 @@ export async function viewStatus(
   if (phase >= PHASE.SENDER_REGISTRATION) {
     display.header("Slot Status");
 
-    // Show slots up to max participants
-    const claimedSlots = await getClaimedSlots(
-      contract,
-      BigInt(gameId),
-      maxParticipants,
-      callerAddress
-    );
+    let claimedSlots: number[];
+    let receiverClaimedSlots: number[] = [];
+
+    if (options.events) {
+      // Use events for faster slot discovery
+      display.step("Fetching slot status from events...");
+      const blockNumber = await node.getBlockNumber();
+
+      try {
+        claimedSlots = await getClaimedSlotsFromEvents(
+          node,
+          BigInt(gameId),
+          0,
+          blockNumber
+        );
+
+        if (phase >= PHASE.RECEIVER_CLAIM) {
+          receiverClaimedSlots = await getReceiverClaimedSlotsFromEvents(
+            node,
+            BigInt(gameId),
+            0,
+            blockNumber
+          );
+        }
+      } catch (err) {
+        display.warn("Event fetch failed, falling back to view functions...");
+        claimedSlots = await getClaimedSlots(
+          contract,
+          BigInt(gameId),
+          maxParticipants,
+          callerAddress
+        );
+      }
+    } else {
+      // Original N+1 query approach
+      claimedSlots = await getClaimedSlots(
+        contract,
+        BigInt(gameId),
+        maxParticipants,
+        callerAddress
+      );
+    }
 
     for (let slot = 1; slot <= maxParticipants; slot++) {
       const isClaimed = claimedSlots.includes(slot);
+      const hasReceiver = receiverClaimedSlots.includes(slot);
 
-      // Check for delivery data if in receiver claim phase
-      let hasData = false;
-      if (phase >= PHASE.RECEIVER_CLAIM && isClaimed) {
-        try {
-          const data = await contract.methods
-            .get_slot_delivery_data(BigInt(gameId), BigInt(slot))
-            .simulate({ from: callerAddress });
-          hasData = data[0] !== 0n;
-        } catch {
-          // No data
+      if (options.events && phase >= PHASE.RECEIVER_CLAIM) {
+        // Use extended display with receiver info when using events
+        display.slotStatusExtended(slot, isClaimed, hasReceiver);
+      } else {
+        // Check for delivery data if in receiver claim phase (legacy mode)
+        let hasData = false;
+        if (phase >= PHASE.RECEIVER_CLAIM && isClaimed && !options.events) {
+          try {
+            const data = await contract.methods
+              .get_slot_delivery_data(BigInt(gameId), BigInt(slot))
+              .simulate({ from: callerAddress });
+            hasData = data[0] !== 0n;
+          } catch {
+            // No data
+          }
         }
+        display.slotStatus(slot, isClaimed, hasData);
       }
-
-      display.slotStatus(slot, isClaimed, hasData);
     }
     display.divider();
   }
@@ -264,6 +308,7 @@ export function registerAdminCommands(
     .command("status")
     .description("View game status (alias for global status)")
     .option("--game <id>", "Game ID", parseInt)
+    .option("--events", "Use events for faster slot discovery")
     .action(async (options) => {
       try {
         const { wallet, accountAddress, node } = await getWallet();
