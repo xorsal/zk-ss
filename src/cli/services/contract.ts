@@ -38,7 +38,6 @@ export async function deployContract(
   admin: AztecAddress
 ): Promise<SecretSantaContract> {
   const paymentMethod = await getSponsoredPaymentMethod(wallet);
-  console.log('paymentMethod', paymentMethod);
   const deployMethod = await Contract.deploy(
     wallet,
     SecretSantaContractArtifact,
@@ -46,12 +45,9 @@ export async function deployContract(
     "constructor"
   )
 
-  console.log('deploying contract');
   const tx = await deployMethod.send({ from: admin, fee: { paymentMethod } });
-  console.log('tx', tx);
   const contract = await tx.deployed();
 
-  console.log('contract deployed', contract.address.toString());
   return contract as SecretSantaContract;
 }
 
@@ -71,10 +67,7 @@ export async function connectToContract(
   }
 
   // Register the contract with the wallet
-  await wallet.registerContract({
-    instance,
-    artifact: SecretSantaContractArtifact,
-  });
+  await wallet.registerContract(instance, SecretSantaContractArtifact);
 
   // Now we can get the contract reference
   return SecretSantaContract.at(contractAddress, wallet);

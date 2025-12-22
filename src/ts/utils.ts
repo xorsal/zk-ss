@@ -2,7 +2,7 @@ import { AztecAddress } from "@aztec/aztec.js/addresses";
 import { Contract } from "@aztec/aztec.js/contracts";
 import { createAztecNodeClient, waitForNode } from "@aztec/aztec.js/node";
 import type { Wallet } from "@aztec/aztec.js/wallet";
-import { registerInitialSandboxAccountsInWallet, TestWallet } from "@aztec/test-wallet/server";
+import { registerInitialLocalNetworkAccountsInWallet, TestWallet } from "@aztec/test-wallet/server";
 import { createStore, type AztecLMDBStoreV2 } from "@aztec/kv-store/lmdb-v2";
 import { createPXE, getPXEConfig, type PXE } from "@aztec/pxe/server";
 import {
@@ -42,7 +42,7 @@ export const setupTestSuite = async (suffix?: string) => {
   const { pxe, store } = await setupPXE(suffix);
   const aztecNode = createAztecNodeClient(NODE_URL);
   const wallet: TestWallet = await TestWallet.create(aztecNode);
-  const accounts: AztecAddress[] = await registerInitialSandboxAccountsInWallet(wallet);
+  const accounts: AztecAddress[] = await registerInitialLocalNetworkAccountsInWallet(wallet);
 
   return {
     pxe,

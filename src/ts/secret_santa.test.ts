@@ -21,9 +21,10 @@ import { AztecAddress } from "@aztec/aztec.js/addresses";
 import { Fr } from "@aztec/aztec.js/fields";
 import { INITIAL_TEST_SECRET_KEYS } from "@aztec/accounts/testing";
 import { deriveMasterIncomingViewingSecretKey, derivePublicKeyFromSecretKey } from "@aztec/stdlib/keys";
-import type { GrumpkinScalar } from "@aztec/foundation/fields";
+import type { GrumpkinScalar } from "@aztec/foundation/curves/grumpkin";
 import { deploySecretSanta, setupTestSuite } from "./utils.js";
 import { SecretSantaContract } from "../../artifacts/SecretSanta.js";
+import { encryptDeliveryData, decryptDeliveryData } from "../cli/services/crypto.js";
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 
 const PHASE_ENROLLMENT = 1;
@@ -37,6 +38,7 @@ describe("Secret Santa Contract E2E", () => {
   let wallet: Awaited<ReturnType<typeof setupTestSuite>>["wallet"];
   let accounts: AztecAddress[];
 
+  // Alice is both owner/admin AND a participant
   let alice: AztecAddress;
   let bob: AztecAddress;
   let carl: AztecAddress;
@@ -54,8 +56,12 @@ describe("Secret Santa Contract E2E", () => {
 
   beforeAll(async () => {
     ({ pxe, store, wallet, accounts } = await setupTestSuite());
+    // Alice is both owner AND participant
     [alice, bob, carl] = accounts;
     console.log("Connected to Aztec sandbox with test accounts");
+    console.log(`  Alice (owner + participant): ${alice.toString()}`);
+    console.log(`  Bob (participant): ${bob.toString()}`);
+    console.log(`  Carl (participant): ${carl.toString()}`);
 
     // Derive deterministic encryption keypairs from test account secrets
     // These use the same keys as Aztec's master incoming viewing keys
@@ -81,18 +87,18 @@ describe("Secret Santa Contract E2E", () => {
 
   it("full secret santa game flow", async () => {
     // ============================================================
-    // STEP 1: Deploy the contract
+    // STEP 1: Deploy the contract (Alice is the contract owner)
     // ============================================================
     console.log("\n--- Step 1: Deploying contract ---");
     contract = await deploySecretSanta(wallet, alice);
     console.log(`SecretSanta contract deployed at ${contract.address}`);
 
     // ============================================================
-    // STEP 2: Create a game
+    // STEP 2: Alice (owner) creates a game with exactly 3 participants
     // ============================================================
-    console.log("\n--- Step 2: Creating game ---");
+    console.log("\n--- Step 2: Alice creating game ---");
     await contract.methods
-      .create_game(3, 10) // min 3, max 10 participants
+      .create_game(3, 3) // min 3, max 3 participants
       .send({ from: alice })
       .wait();
 
@@ -115,9 +121,9 @@ describe("Secret Santa Contract E2E", () => {
     expect(participantCount).toBe(3n);
 
     // ============================================================
-    // STEP 4: Advance to SENDER_REGISTRATION phase
+    // STEP 4: Alice (owner) advances to SENDER_REGISTRATION phase
     // ============================================================
-    console.log("\n--- Step 4: Advancing to SENDER_REGISTRATION ---");
+    console.log("\n--- Step 4: Alice advancing to SENDER_REGISTRATION ---");
     await contract.methods.advance_phase(gameId).send({ from: alice }).wait();
 
     const senderPhase = await contract.methods.get_game_phase(gameId).simulate({ from: alice });
@@ -146,9 +152,9 @@ describe("Secret Santa Contract E2E", () => {
     expect(storedKey3.x).toBe(carlEncryptionKey.x.toBigInt());
 
     // ============================================================
-    // STEP 6: Advance to RECEIVER_CLAIM phase
+    // STEP 6: Alice (owner) advances to RECEIVER_CLAIM phase
     // ============================================================
-    console.log("\n--- Step 6: Advancing to RECEIVER_CLAIM ---");
+    console.log("\n--- Step 6: Alice advancing to RECEIVER_CLAIM ---");
     await contract.methods.advance_phase(gameId).send({ from: alice }).wait();
 
     const receiverPhase = await contract.methods.get_game_phase(gameId).simulate({ from: alice });
@@ -160,89 +166,113 @@ describe("Secret Santa Contract E2E", () => {
     // Bob (slot 2) claims slot 3 (Carl's) with encrypted delivery data
     // Carl (slot 3) claims slot 1 (Alice's) with encrypted delivery data
     //
-    // The contract uses check_nullifier_exists to verify each caller is NOT
+    // The contract uses nullifier collision to verify each caller is NOT
     // the sender of the slot they're claiming.
     //
-    // In production, receivers would:
-    // 1. Fetch the slot's encryption pubkey
-    // 2. Encrypt their delivery address using that pubkey
-    // 3. Pass the encrypted data to claim_as_receiver
+    // Each receiver encrypts their delivery address using the slot owner's
+    // public encryption key (ECIES encryption).
     // ============================================================
-    console.log("\n--- Step 7: Claiming as receivers with encrypted delivery data ---");
+    console.log("\n--- Step 7: Claiming as receivers with ECIES encrypted delivery data ---");
 
-    // Alice claims slot 2 (Bob's slot), encrypts her delivery address for Bob
-    // In production: would encrypt with bobEncryptionKey
-    const aliceDeliveryData: [Fr, Fr, Fr, Fr] = [
-      Fr.fromString("0x1111"), // encrypted delivery data
-      Fr.fromString("0x2222"),
-      Fr.fromString("0x3333"),
-      Fr.fromString("0x4444"),
-    ];
-    await contract.withWallet(wallet).methods.claim_as_receiver(gameId, 2, aliceDeliveryData).send({ from: alice }).wait();
+    // Define delivery addresses for each participant
+    const aliceAddress = "Alice's delivery address: 123 Main St, North Pole";
+    const bobAddress = "Bob's delivery address: 456 Elf Lane, Workshop City";
+    const carlAddress = "Carl's delivery address: 789 Reindeer Road, Snow Village";
 
-    // Bob claims slot 3 (Carl's slot), encrypts his delivery address for Carl
-    const bobDeliveryData: [Fr, Fr, Fr, Fr] = [
-      Fr.fromString("0x5555"),
-      Fr.fromString("0x6666"),
-      Fr.fromString("0x7777"),
-      Fr.fromString("0x8888"),
-    ];
-    await contract.withWallet(wallet).methods.claim_as_receiver(gameId, 3, bobDeliveryData).send({ from: bob }).wait();
+    // Alice claims slot 2 (Bob's slot) - encrypts her address with Bob's public key
+    // Bob will be able to decrypt and see Alice's address
+    console.log("  Alice encrypting her address for Bob (slot 2 owner)...");
+    const aliceEncryptedData = await encryptDeliveryData(aliceAddress, {
+      x: bobEncryptionKey.x.toBigInt(),
+      y: bobEncryptionKey.y.toBigInt(),
+      is_infinite: bobEncryptionKey.is_infinite,
+    });
+    await contract.withWallet(wallet).methods.claim_as_receiver(gameId, 2, aliceEncryptedData).send({ from: alice }).wait();
+    console.log("  Alice claimed slot 2 successfully");
 
-    // Carl claims slot 1 (Alice's slot), encrypts his delivery address for Alice
-    const carlDeliveryData: [Fr, Fr, Fr, Fr] = [
-      Fr.fromString("0x9999"),
-      Fr.fromString("0xaaaa"),
-      Fr.fromString("0xbbbb"),
-      Fr.fromString("0xcccc"),
-    ];
-    await contract.withWallet(wallet).methods.claim_as_receiver(gameId, 1, carlDeliveryData).send({ from: carl }).wait();
+    // Bob claims slot 3 (Carl's slot) - encrypts his address with Carl's public key
+    // Carl will be able to decrypt and see Bob's address
+    console.log("  Bob encrypting his address for Carl (slot 3 owner)...");
+    const bobEncryptedData = await encryptDeliveryData(bobAddress, {
+      x: carlEncryptionKey.x.toBigInt(),
+      y: carlEncryptionKey.y.toBigInt(),
+      is_infinite: carlEncryptionKey.is_infinite,
+    });
+    await contract.withWallet(wallet).methods.claim_as_receiver(gameId, 3, bobEncryptedData).send({ from: bob }).wait();
+    console.log("  Bob claimed slot 3 successfully");
 
-    // Verify encrypted delivery data was stored
+    // Carl claims slot 1 (Alice's slot) - encrypts his address with Alice's public key
+    // Alice will be able to decrypt and see Carl's address
+    console.log("  Carl encrypting his address for Alice (slot 1 owner)...");
+    const carlEncryptedData = await encryptDeliveryData(carlAddress, {
+      x: aliceEncryptionKey.x.toBigInt(),
+      y: aliceEncryptionKey.y.toBigInt(),
+      is_infinite: aliceEncryptionKey.is_infinite,
+    });
+    await contract.withWallet(wallet).methods.claim_as_receiver(gameId, 1, carlEncryptedData).send({ from: carl }).wait();
+    console.log("  Carl claimed slot 1 successfully");
+
+    // Verify encrypted delivery data was stored (first field is ephemeral pubkey X)
     const storedDelivery1 = await contract.methods.get_slot_delivery_data(gameId, 1n).simulate({ from: alice });
     const storedDelivery2 = await contract.methods.get_slot_delivery_data(gameId, 2n).simulate({ from: alice });
     const storedDelivery3 = await contract.methods.get_slot_delivery_data(gameId, 3n).simulate({ from: alice });
-    expect(storedDelivery1[0]).toBe(carlDeliveryData[0].toBigInt());
-    expect(storedDelivery2[0]).toBe(aliceDeliveryData[0].toBigInt());
-    expect(storedDelivery3[0]).toBe(bobDeliveryData[0].toBigInt());
+    expect(storedDelivery1[0]).toBe(carlEncryptedData[0].toBigInt());
+    expect(storedDelivery2[0]).toBe(aliceEncryptedData[0].toBigInt());
+    expect(storedDelivery3[0]).toBe(bobEncryptedData[0].toBigInt());
 
     // ============================================================
-    // STEP 8: Advance to COMPLETED phase
+    // STEP 8: Alice (owner) advances to COMPLETED phase
     // ============================================================
-    console.log("\n--- Step 8: Completing game ---");
+    console.log("\n--- Step 8: Alice completing game ---");
     await contract.methods.advance_phase(gameId).send({ from: alice }).wait();
 
     const finalPhase = await contract.methods.get_game_phase(gameId).simulate({ from: alice });
     expect(finalPhase).toBe(BigInt(PHASE_COMPLETED));
 
     // ============================================================
-    // STEP 9: Senders retrieve encrypted delivery data
-    // In production, each sender would:
-    // 1. Read the encrypted delivery data for their slot
-    // 2. Decrypt using their private key
-    // 3. Get the receiver's delivery address
+    // STEP 9: Senders decrypt delivery data to reveal peer addresses
+    // Each sender retrieves encrypted data from their slot and decrypts
+    // using their private key to reveal who they need to send a gift to.
     // ============================================================
-    console.log("\n--- Step 9: Senders can now retrieve delivery data ---");
+    console.log("\n--- Step 9: Senders decrypt delivery data to reveal peer addresses ---");
 
-    // Alice owns slot 1, can read delivery data (Carl's encrypted address)
+    // Alice owns slot 1 - decrypts to see Carl's address
+    // (Carl claimed slot 1 and encrypted his address with Alice's pubkey)
     const aliceRetrieved = await contract.methods.get_slot_delivery_data(gameId, 1n).simulate({ from: alice });
-    console.log(`  Alice (slot 1) retrieves: ${aliceRetrieved[0].toString().slice(0, 10)}...`);
+    const decryptedForAlice = await decryptDeliveryData(
+      aliceRetrieved as [bigint, bigint, bigint, bigint, bigint, bigint, bigint, bigint],
+      alicePrivateKey
+    );
+    console.log(`  Alice (slot 1) decrypts: "${decryptedForAlice}"`);
+    expect(decryptedForAlice).toBe(carlAddress);
 
-    // Bob owns slot 2, can read delivery data (Alice's encrypted address)
+    // Bob owns slot 2 - decrypts to see Alice's address
+    // (Alice claimed slot 2 and encrypted her address with Bob's pubkey)
     const bobRetrieved = await contract.methods.get_slot_delivery_data(gameId, 2n).simulate({ from: bob });
-    console.log(`  Bob (slot 2) retrieves: ${bobRetrieved[0].toString().slice(0, 10)}...`);
+    const decryptedForBob = await decryptDeliveryData(
+      bobRetrieved as [bigint, bigint, bigint, bigint, bigint, bigint, bigint, bigint],
+      bobPrivateKey
+    );
+    console.log(`  Bob (slot 2) decrypts: "${decryptedForBob}"`);
+    expect(decryptedForBob).toBe(aliceAddress);
 
-    // Carl owns slot 3, can read delivery data (Bob's encrypted address)
+    // Carl owns slot 3 - decrypts to see Bob's address
+    // (Bob claimed slot 3 and encrypted his address with Carl's pubkey)
     const carlRetrieved = await contract.methods.get_slot_delivery_data(gameId, 3n).simulate({ from: carl });
-    console.log(`  Carl (slot 3) retrieves: ${carlRetrieved[0].toString().slice(0, 10)}...`);
+    const decryptedForCarl = await decryptDeliveryData(
+      carlRetrieved as [bigint, bigint, bigint, bigint, bigint, bigint, bigint, bigint],
+      carlPrivateKey
+    );
+    console.log(`  Carl (slot 3) decrypts: "${decryptedForCarl}"`);
+    expect(decryptedForCarl).toBe(bobAddress);
 
     // ============================================================
     // VERIFICATION
     // ============================================================
     console.log("\n--- Verification ---");
 
-    const admin = await contract.methods.get_admin().simulate({ from: alice });
-    expect(admin.toString()).toBe(alice.toString());
+    const contractOwner = await contract.methods.get_admin().simulate({ from: alice });
+    expect(contractOwner.toString()).toBe(alice.toString());
 
     const finalCount = await contract.methods.get_participant_count(gameId).simulate({ from: alice });
     expect(finalCount).toBe(3n);

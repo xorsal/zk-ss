@@ -8,7 +8,7 @@
 import { Fr } from "@aztec/aztec.js/fields";
 import { AztecAddress } from "@aztec/aztec.js/addresses";
 import { getContractInstanceFromInstantiationParams } from "@aztec/aztec.js/contracts";
-import { poseidon2Hash } from "@aztec/foundation/crypto";
+import { poseidon2Hash } from "@aztec/foundation/crypto/poseidon";
 import { TestWallet } from "@aztec/test-wallet/server";
 import type { AccountManager } from "@aztec/aztec.js/wallet";
 import { deriveSigningKey, derivePublicKeyFromSecretKey } from "@aztec/stdlib/keys";
@@ -45,10 +45,7 @@ export async function registerSponsoredFPC(testWallet: TestWallet): Promise<Azte
   }
 
   // Register the contract
-  await testWallet.registerContract({
-    instance,
-    artifact: SponsoredFPCContractArtifact,
-  });
+  await testWallet.registerContract(instance, SponsoredFPCContractArtifact);
 
   return instance.address;
 }

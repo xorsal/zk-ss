@@ -10,10 +10,9 @@ use dep::aztec::macros::aztec;
 #[aztec]
 pub contract SecretSanta {
     use dep::aztec::{
-        event::event_emission::emit_event_in_public,
         macros::{
             events::event,
-            functions::{external, initializer, internal, view},
+            functions::{external, initializer, only_self, view},
             storage::storage,
         },
         messages::message_delivery::MessageDelivery,
@@ -22,7 +21,7 @@ pub contract SecretSanta {
             address::AztecAddress, hash::poseidon2_hash_with_separator,
             point::Point, traits::ToField,
         },
-        state_vars::{Map, PrivateSet, PublicImmutable, PublicMutable},
+        state_vars::{Map, Owned, PrivateSet, PublicImmutable, PublicMutable},
         utils::comparison::Comparator,
     };
 
@@ -65,9 +64,9 @@ pub contract SecretSanta {
         // Encrypted delivery data for each slot (receiver posts, only sender can decrypt)
         // Increased to 8 fields for longer payloads (~111 bytes)
         slot_delivery_data: Map<Field, Map<Field, PublicMutable<[Field; 8], Context>, Context>, Context>,
-        participants: Map<AztecAddress, PrivateSet<ParticipantNote, Context>, Context>,
-        sender_assignments: Map<AztecAddress, PrivateSet<SenderNote, Context>, Context>,
-        receiver_claims: Map<AztecAddress, PrivateSet<ReceiverNote, Context>, Context>,
+        participants: Owned<PrivateSet<ParticipantNote, Context>, Context>,
+        sender_assignments: Owned<PrivateSet<SenderNote, Context>, Context>,
+        receiver_claims: Owned<PrivateSet<ReceiverNote, Context>, Context>,
         // Prevents multiple receivers claiming the same slot (ensures valid permutation)
         slot_receiver_claimed: Map<Field, Map<Field, PublicMutable<bool, Context>, Context>, Context>,
         // Tracks receiver claims to verify all participants claimed before completing
@@ -109,126 +108,126 @@ pub contract SecretSanta {
     #[initializer]
     fn constructor(admin: AztecAddress) {
         assert(!admin.is_zero(), "Invalid admin address");
-        storage.admin.initialize(admin);
-        storage.next_game_id.write(1);
+        self.storage.admin.initialize(admin);
+        self.storage.next_game_id.write(1);
     }
 
     #[external("public")]
     fn create_game(min_participants: u32, max_participants_param: u32) -> pub Field {
-        let caller = context.msg_sender().unwrap();
-        assert(caller.eq(storage.admin.read()), "Only admin can create games");
+        let caller = self.msg_sender().unwrap();
+        assert(caller.eq(self.storage.admin.read()), "Only admin can create games");
         assert(min_participants >= 3, "Need at least 3 participants");
         assert(max_participants_param >= min_participants, "Max must be >= min");
 
-        let game_id = storage.next_game_id.read();
+        let game_id = self.storage.next_game_id.read();
 
-        storage.game_phases.at(game_id).write(PHASE_ENROLLMENT);
-        storage.participant_counts.at(game_id).write(0);
-        storage.max_participants.at(game_id).write(max_participants_param);
-        storage.next_game_id.write(game_id + 1);
+        self.storage.game_phases.at(game_id).write(PHASE_ENROLLMENT);
+        self.storage.participant_counts.at(game_id).write(0);
+        self.storage.max_participants.at(game_id).write(max_participants_param);
+        self.storage.next_game_id.write(game_id + 1);
 
         game_id
     }
 
     #[external("public")]
     fn advance_phase(game_id: Field) {
-        let caller = context.msg_sender().unwrap();
-        assert(caller.eq(storage.admin.read()), "Only admin can advance phases");
-        let current_phase = storage.game_phases.at(game_id).read();
+        let caller = self.msg_sender().unwrap();
+        assert(caller.eq(self.storage.admin.read()), "Only admin can advance phases");
+        let current_phase = self.storage.game_phases.at(game_id).read();
 
         if current_phase == PHASE_ENROLLMENT {
             // Verify minimum participants before advancing
-            let count = storage.participant_counts.at(game_id).read();
+            let count = self.storage.participant_counts.at(game_id).read();
             assert(count >= 3, "Need at least 3 participants to start");
-            storage.game_phases.at(game_id).write(PHASE_SENDER_REGISTRATION);
+            self.storage.game_phases.at(game_id).write(PHASE_SENDER_REGISTRATION);
         } else if current_phase == PHASE_SENDER_REGISTRATION {
             // Verify all participants have registered as senders
-            let participant_count = storage.participant_counts.at(game_id).read();
-            let sender_count = storage.sender_registration_counts.at(game_id).read();
+            let participant_count = self.storage.participant_counts.at(game_id).read();
+            let sender_count = self.storage.sender_registration_counts.at(game_id).read();
             assert(
                 sender_count == participant_count,
                 "Not all participants have registered as senders",
             );
-            storage.game_phases.at(game_id).write(PHASE_RECEIVER_CLAIM);
+            self.storage.game_phases.at(game_id).write(PHASE_RECEIVER_CLAIM);
         } else if current_phase == PHASE_RECEIVER_CLAIM {
             // Verify all slots have receivers before completing
-            let participant_count = storage.participant_counts.at(game_id).read();
-            let receiver_count = storage.receiver_claim_counts.at(game_id).read();
+            let participant_count = self.storage.participant_counts.at(game_id).read();
+            let receiver_count = self.storage.receiver_claim_counts.at(game_id).read();
             assert(
                 receiver_count == participant_count,
                 "Not all participants have claimed a receiver slot",
             );
-            storage.game_phases.at(game_id).write(PHASE_COMPLETED);
+            self.storage.game_phases.at(game_id).write(PHASE_COMPLETED);
         } else {
             assert(false, "Cannot advance from current phase");
         }
     }
 
-    #[internal]
     #[external("public")]
+    #[only_self]
     fn _increment_participant_count(game_id: Field) {
-        let phase = storage.game_phases.at(game_id).read();
+        let phase = self.storage.game_phases.at(game_id).read();
         assert(phase == PHASE_ENROLLMENT, "Not in enrollment phase");
 
-        let max_p = storage.max_participants.at(game_id).read();
-        let current_count = storage.participant_counts.at(game_id).read();
+        let max_p = self.storage.max_participants.at(game_id).read();
+        let current_count = self.storage.participant_counts.at(game_id).read();
         assert(current_count < max_p, "Game is full");
-        storage.participant_counts.at(game_id).write(current_count + 1);
+        self.storage.participant_counts.at(game_id).write(current_count + 1);
     }
 
-    #[internal]
     #[external("public")]
+    #[only_self]
     fn _try_claim_slot(game_id: Field, slot: u32, encryption_key: Point) {
-        let phase = storage.game_phases.at(game_id).read();
+        let phase = self.storage.game_phases.at(game_id).read();
         assert(phase == PHASE_SENDER_REGISTRATION, "Not in sender registration phase");
 
-        let participant_count = storage.participant_counts.at(game_id).read();
+        let participant_count = self.storage.participant_counts.at(game_id).read();
 
         assert(slot >= 1, "Slot must be >= 1");
         assert(slot <= participant_count, "Slot exceeds participant count");
 
-        let already_claimed = storage.slot_claimed.at(game_id).at(slot as Field).read();
+        let already_claimed = self.storage.slot_claimed.at(game_id).at(slot as Field).read();
         assert(!already_claimed, "Slot already claimed");
-        storage.slot_claimed.at(game_id).at(slot as Field).write(true);
+        self.storage.slot_claimed.at(game_id).at(slot as Field).write(true);
 
         // Store sender's encryption public key for this slot
         // Anyone can see the key, but NOT who owns it
-        storage.slot_encryption_keys.at(game_id).at(slot as Field).write(encryption_key);
+        self.storage.slot_encryption_keys.at(game_id).at(slot as Field).write(encryption_key);
 
-        let sender_count = storage.sender_registration_counts.at(game_id).read();
-        storage.sender_registration_counts.at(game_id).write(sender_count + 1);
+        let sender_count = self.storage.sender_registration_counts.at(game_id).read();
+        self.storage.sender_registration_counts.at(game_id).write(sender_count + 1);
 
         // Emit public event for slot claim
-        emit_event_in_public(SlotClaimed { game_id, slot: slot as Field }, &mut context);
+        self.emit(SlotClaimed { game_id, slot: slot as Field });
     }
 
-    #[internal]
     #[external("public")]
+    #[only_self]
     fn _store_delivery_data(game_id: Field, slot: u32, encrypted_data: [Field; 8]) {
         // Store encrypted delivery data for the slot
         // Only the sender (who owns the encryption private key) can decrypt
-        storage.slot_delivery_data.at(game_id).at(slot as Field).write(encrypted_data);
+        self.storage.slot_delivery_data.at(game_id).at(slot as Field).write(encrypted_data);
     }
 
-    #[internal]
     #[external("public")]
+    #[only_self]
     fn _mark_receiver_claim(game_id: Field, slot: u32) {
-        let phase = storage.game_phases.at(game_id).read();
+        let phase = self.storage.game_phases.at(game_id).read();
         assert(phase == PHASE_RECEIVER_CLAIM, "Not in receiver claim phase");
 
-        let slot_has_sender = storage.slot_claimed.at(game_id).at(slot as Field).read();
+        let slot_has_sender = self.storage.slot_claimed.at(game_id).at(slot as Field).read();
         assert(slot_has_sender, "Slot has no sender registered");
 
         let already_claimed =
-            storage.slot_receiver_claimed.at(game_id).at(slot as Field).read();
+            self.storage.slot_receiver_claimed.at(game_id).at(slot as Field).read();
         assert(!already_claimed, "Slot already has a receiver");
-        storage.slot_receiver_claimed.at(game_id).at(slot as Field).write(true);
+        self.storage.slot_receiver_claimed.at(game_id).at(slot as Field).write(true);
 
-        let count = storage.receiver_claim_counts.at(game_id).read();
-        storage.receiver_claim_counts.at(game_id).write(count + 1);
+        let count = self.storage.receiver_claim_counts.at(game_id).read();
+        self.storage.receiver_claim_counts.at(game_id).write(count + 1);
 
         // Emit public event for receiver claim
-        emit_event_in_public(ReceiverClaimed { game_id, slot: slot as Field }, &mut context);
+        self.emit(ReceiverClaimed { game_id, slot: slot as Field });
     }
 
     // ============================================================
@@ -237,43 +236,38 @@ pub contract SecretSanta {
 
     #[external("private")]
     fn enroll(game_id: Field) {
-        let caller = context.msg_sender().unwrap();
+        let caller = self.msg_sender().unwrap();
 
         let note = ParticipantNote::new(caller, game_id);
-        storage.participants.at(caller).insert(note).emit(caller, MessageDelivery.CONSTRAINED_ONCHAIN);
+        self.storage.participants.at(caller).insert(note).deliver(MessageDelivery.CONSTRAINED_ONCHAIN);
 
         let enrollment_nullifier = compute_enrollment_nullifier(caller, game_id);
-        context.push_nullifier(enrollment_nullifier);
+        self.context.push_nullifier(enrollment_nullifier);
 
-        SecretSanta::at(context.this_address())
-            ._increment_participant_count(game_id)
-            .enqueue(&mut context);
+        self.enqueue_self._increment_participant_count(game_id);
     }
 
     #[external("private")]
     fn register_as_sender(game_id: Field, chosen_slot: u32, encryption_key: Point) {
-        let caller = context.msg_sender().unwrap();
+        let caller = self.msg_sender().unwrap();
 
         // Verify enrollment by filtering for notes matching this game_id
         let options = NoteGetterOptions::new()
             .select(ParticipantNote::properties().game_id, Comparator.EQ, game_id)
             .set_limit(1);
-        let participant_notes = storage.participants.at(caller).get_notes(options);
+        let participant_notes = self.storage.participants.at(caller).get_notes(options);
         assert(participant_notes.len() > 0, "Not enrolled in this game");
 
         let sender_note = SenderNote::new(caller, game_id, chosen_slot as Field);
-        storage.sender_assignments.at(caller).insert(sender_note).emit(
-            caller,
+        self.storage.sender_assignments.at(caller).insert(sender_note).deliver(
             MessageDelivery.CONSTRAINED_ONCHAIN,
         );
 
         let sender_nullifier = compute_sender_nullifier(caller, game_id, chosen_slot as Field);
-        context.push_nullifier(sender_nullifier);
+        self.context.push_nullifier(sender_nullifier);
 
         // Claim slot and publish encryption key (key is public, owner is hidden)
-        SecretSanta::at(context.this_address())
-            ._try_claim_slot(game_id, chosen_slot, encryption_key)
-            .enqueue(&mut context);
+        self.enqueue_self._try_claim_slot(game_id, chosen_slot, encryption_key);
     }
 
     #[external("private")]
@@ -282,13 +276,13 @@ pub contract SecretSanta {
         target_slot: u32,
         encrypted_delivery_data: [Field; 8],
     ) {
-        let caller = context.msg_sender().unwrap();
+        let caller = self.msg_sender().unwrap();
 
         // Verify enrollment by filtering for notes matching this game_id
         let options = NoteGetterOptions::new()
             .select(ParticipantNote::properties().game_id, Comparator.EQ, game_id)
             .set_limit(1);
-        let participant_notes = storage.participants.at(caller).get_notes(options);
+        let participant_notes = self.storage.participants.at(caller).get_notes(options);
         assert(participant_notes.len() > 0, "Not enrolled in this game");
 
         // SECURITY CHECK: Prevent self-selection via nullifier collision
@@ -297,26 +291,21 @@ pub contract SecretSanta {
         // If caller is NOT the sender, this is a different nullifier (different address)
         // so no collision occurs.
         let self_selection_check = compute_sender_nullifier(caller, game_id, target_slot as Field);
-        context.push_nullifier(self_selection_check);
+        self.context.push_nullifier(self_selection_check);
 
         let receiver_nullifier = compute_receiver_nullifier(caller, game_id);
-        context.push_nullifier(receiver_nullifier);
+        self.context.push_nullifier(receiver_nullifier);
 
         let receiver_note = ReceiverNote::new(caller, game_id, target_slot as Field);
-        storage.receiver_claims.at(caller).insert(receiver_note).emit(
-            caller,
+        self.storage.receiver_claims.at(caller).insert(receiver_note).deliver(
             MessageDelivery.CONSTRAINED_ONCHAIN,
         );
 
-        SecretSanta::at(context.this_address())
-            ._mark_receiver_claim(game_id, target_slot)
-            .enqueue(&mut context);
+        self.enqueue_self._mark_receiver_claim(game_id, target_slot);
 
         // Store encrypted delivery data for the sender
         // Receiver encrypts off-chain using slot's public key, only sender can decrypt
-        SecretSanta::at(context.this_address())
-            ._store_delivery_data(game_id, target_slot, encrypted_delivery_data)
-            .enqueue(&mut context);
+        self.enqueue_self._store_delivery_data(game_id, target_slot, encrypted_delivery_data);
     }
 
     // ============================================================
@@ -325,57 +314,57 @@ pub contract SecretSanta {
 
     #[external("utility")]
     unconstrained fn get_game_phase(game_id: Field) -> u8 {
-        storage.game_phases.at(game_id).read()
+        self.storage.game_phases.at(game_id).read()
     }
 
     #[external("utility")]
     unconstrained fn get_participant_count(game_id: Field) -> u32 {
-        storage.participant_counts.at(game_id).read()
+        self.storage.participant_counts.at(game_id).read()
     }
 
     #[external("utility")]
     unconstrained fn is_slot_claimed(game_id: Field, slot: Field) -> bool {
-        storage.slot_claimed.at(game_id).at(slot).read()
+        self.storage.slot_claimed.at(game_id).at(slot).read()
     }
 
     #[external("utility")]
     unconstrained fn get_next_game_id() -> Field {
-        storage.next_game_id.read()
+        self.storage.next_game_id.read()
     }
 
     /// Get the encryption public key for a slot (used by receivers to encrypt delivery data)
     #[external("utility")]
     unconstrained fn get_slot_encryption_key(game_id: Field, slot: Field) -> Point {
-        storage.slot_encryption_keys.at(game_id).at(slot).read()
+        self.storage.slot_encryption_keys.at(game_id).at(slot).read()
     }
 
     /// Get the encrypted delivery data for a slot (used by senders to retrieve their receiver's info)
     #[external("utility")]
     unconstrained fn get_slot_delivery_data(game_id: Field, slot: Field) -> [Field; 8] {
-        storage.slot_delivery_data.at(game_id).at(slot).read()
+        self.storage.slot_delivery_data.at(game_id).at(slot).read()
     }
 
     /// Check if a slot has been claimed by a receiver
     #[external("utility")]
     unconstrained fn is_slot_receiver_claimed(game_id: Field, slot: Field) -> bool {
-        storage.slot_receiver_claimed.at(game_id).at(slot).read()
+        self.storage.slot_receiver_claimed.at(game_id).at(slot).read()
     }
 
     /// Get the count of receiver claims for a game
     #[external("utility")]
     unconstrained fn get_receiver_claim_count(game_id: Field) -> u32 {
-        storage.receiver_claim_counts.at(game_id).read()
+        self.storage.receiver_claim_counts.at(game_id).read()
     }
 
     /// Get max participants for a game
     #[external("utility")]
     unconstrained fn get_max_participants(game_id: Field) -> u32 {
-        storage.max_participants.at(game_id).read()
+        self.storage.max_participants.at(game_id).read()
     }
 
     #[external("public")]
     #[view]
     fn get_admin() -> pub AztecAddress {
-        storage.admin.read()
+        self.storage.admin.read()
     }
 }
