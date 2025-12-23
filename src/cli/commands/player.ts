@@ -94,13 +94,16 @@ export async function enroll(
   display.step(`Enrolling in game #${gameId}...`);
 
   const paymentMethod = await getSponsoredPaymentMethod(wallet);
+  const txStart = Date.now();
   await contract
     .withWallet(wallet)
     .methods.enroll(BigInt(gameId))
     .send({ from: callerAddress, fee: { paymentMethod } })
     .wait();
+  const txDuration = Date.now() - txStart;
 
   display.success(`Enrolled in game #${gameId}!`);
+  display.txTiming("Transaction time", txDuration);
 
   // Wait for phase change
   const newPhase = await waitForPhaseChange(contract, BigInt(gameId), PHASE.ENROLLMENT, callerAddress);
@@ -144,23 +147,36 @@ export async function registerAsSender(
     return;
   }
 
-  const availableSlots: number[] = [];
-  for (let i = 1; i <= state.participantCount; i++) {
-    if (!state.senderSlots.includes(i)) {
-      availableSlots.push(i);
-    }
-  }
-
-  display.info(`Available slots: ${availableSlots.length} of ${state.participantCount}`);
-
-  // Get slot
+  // Get slot - with live polling if interactive
   let slot = options.slot;
   if (!slot) {
+    const availableSlots: number[] = [];
+    for (let i = 1; i <= state.participantCount; i++) {
+      if (!state.senderSlots.includes(i)) {
+        availableSlots.push(i);
+      }
+    }
     if (availableSlots.length === 0) {
       display.error("No available slots remaining.");
       return;
     }
-    slot = await prompts.promptSlotWithStatus(state.participantCount, state.senderSlots, "Choose a slot to claim:");
+
+    // Create state fetcher for live polling
+    const fetchState = async () => {
+      const newState = await getGameState(contract, BigInt(gameId), callerAddress);
+      return {
+        senderSlots: newState.senderSlots,
+        receiverSlots: newState.receiverSlots,
+        participantCount: newState.participantCount,
+      };
+    };
+
+    slot = await prompts.promptSlotWithPolling(
+      "sender",
+      { senderSlots: state.senderSlots, receiverSlots: state.receiverSlots, participantCount: state.participantCount },
+      fetchState,
+      POLL_INTERVAL_MS
+    );
   } else {
     // Validate provided slot is available
     if (state.senderSlots.includes(slot)) {
@@ -176,14 +192,17 @@ export async function registerAsSender(
   display.step(`Registering as sender for slot ${slot}...`);
 
   const paymentMethod = await getSponsoredPaymentMethod(wallet);
+  const txStart = Date.now();
   await contract
     .withWallet(wallet)
     .methods.register_as_sender(BigInt(gameId), slot, encryptionKey)
     .send({ from: callerAddress, fee: { paymentMethod } })
     .wait();
+  const txDuration = Date.now() - txStart;
 
   display.success(`Registered as sender for slot ${slot}!`);
   display.keyValue("Your slot", slot.toString());
+  display.txTiming("Transaction time", txDuration);
 
   // Wait for phase change
   const newPhase = await waitForPhaseChange(contract, BigInt(gameId), PHASE.SENDER_REGISTRATION, callerAddress);
@@ -230,20 +249,34 @@ export async function claimAsReceiver(
     return;
   }
 
-  // Available = has a sender but no receiver yet
-  const availableForReceiver = state.senderSlots.filter((slot: number) => !state.receiverSlots.includes(slot));
-  display.info(`Available slots for claiming: ${availableForReceiver.length} of ${state.participantCount}`);
-
-  // Get target slot
+  // Get target slot - with live polling if interactive
   let targetSlot = options.slot;
+  const ownSlot = options.senderSlot; // Pass to exclude own slot in receiver mode
+
   if (!targetSlot) {
+    // Available = has a sender but no receiver yet
+    const availableForReceiver = state.senderSlots.filter((slot: number) => !state.receiverSlots.includes(slot));
     if (availableForReceiver.length === 0) {
       display.error("No available slots to claim. All slots have receivers.");
       return;
     }
-    targetSlot = await prompts.promptSlotFromAvailable(
-      availableForReceiver,
-      "Choose a slot to claim as receiver (not your own!):"
+
+    // Create state fetcher for live polling
+    const fetchState = async () => {
+      const newState = await getGameState(contract, BigInt(gameId), callerAddress);
+      return {
+        senderSlots: newState.senderSlots,
+        receiverSlots: newState.receiverSlots,
+        participantCount: newState.participantCount,
+      };
+    };
+
+    targetSlot = await prompts.promptSlotWithPolling(
+      "receiver",
+      { senderSlots: state.senderSlots, receiverSlots: state.receiverSlots, participantCount: state.participantCount },
+      fetchState,
+      POLL_INTERVAL_MS,
+      ownSlot
     );
   } else {
     // Validate provided slot
@@ -284,6 +317,7 @@ export async function claimAsReceiver(
 
   // If we try to claim our own slot, the transaction will revert due to nullifier collision
   const paymentMethod = await getSponsoredPaymentMethod(wallet);
+  const txStart = Date.now();
   await contract
     .withWallet(wallet)
     .methods.claim_as_receiver(
@@ -293,8 +327,10 @@ export async function claimAsReceiver(
     )
     .send({ from: callerAddress, fee: { paymentMethod } })
     .wait();
+  const txDuration = Date.now() - txStart;
 
   display.success(`Claimed slot ${targetSlot} as receiver!`);
+  display.txTiming("Transaction time", txDuration);
   display.info("Your encrypted delivery address has been stored.");
   display.info("The sender of slot " + targetSlot + " will send you a gift!");
 
@@ -426,9 +462,19 @@ export function registerPlayerCommands(
         if (result) {
           // Fetch slot availability using single RPC call
           const regState = await getGameState(result.contract, BigInt(result.gameId), accountAddress);
-          display.info(`Available slots: ${regState.participantCount - regState.senderSlots.length} of ${regState.participantCount}`);
 
-          const slot = await prompts.promptSlotWithStatus(regState.participantCount, regState.senderSlots, "Choose a slot to claim:");
+          // Create state fetcher for live polling
+          const fetchRegState = async () => {
+            const s = await getGameState(result.contract, BigInt(result.gameId), accountAddress);
+            return { senderSlots: s.senderSlots, receiverSlots: s.receiverSlots, participantCount: s.participantCount };
+          };
+
+          const slot = await prompts.promptSlotWithPolling(
+            "sender",
+            { senderSlots: regState.senderSlots, receiverSlots: regState.receiverSlots, participantCount: regState.participantCount },
+            fetchRegState,
+            POLL_INTERVAL_MS
+          );
           const registerResult = await registerAsSenderInternal(
             wallet, accountAddress, secretKey, result.contract, result.gameId, slot
           );
@@ -437,10 +483,20 @@ export function registerPlayerCommands(
           if (registerResult) {
             // Fetch receiver slot availability using single RPC call
             const claimState = await getGameState(registerResult.contract, BigInt(registerResult.gameId), accountAddress);
-            const availableForReceiver = claimState.senderSlots.filter((s: number) => !claimState.receiverSlots.includes(s));
-            display.info(`Available slots for claiming: ${availableForReceiver.length} of ${claimState.participantCount}`);
 
-            const targetSlot = await prompts.promptSlotFromAvailable(availableForReceiver, "Choose a slot to claim as receiver (not your own):");
+            // Create state fetcher for live polling
+            const fetchClaimState = async () => {
+              const s = await getGameState(registerResult.contract, BigInt(registerResult.gameId), accountAddress);
+              return { senderSlots: s.senderSlots, receiverSlots: s.receiverSlots, participantCount: s.participantCount };
+            };
+
+            const targetSlot = await prompts.promptSlotWithPolling(
+              "receiver",
+              { senderSlots: claimState.senderSlots, receiverSlots: claimState.receiverSlots, participantCount: claimState.participantCount },
+              fetchClaimState,
+              POLL_INTERVAL_MS,
+              registerResult.senderSlot
+            );
             const claimResult = await claimAsReceiverInternal(
               wallet, accountAddress, secretKey, registerResult.contract,
               registerResult.gameId, targetSlot, registerResult.senderSlot
@@ -475,10 +531,20 @@ export function registerPlayerCommands(
         if (result) {
           // Fetch receiver slot availability using single RPC call
           const claimState = await getGameState(result.contract, BigInt(result.gameId), accountAddress);
-          const availableForReceiver = claimState.senderSlots.filter((s: number) => !claimState.receiverSlots.includes(s));
-          display.info(`Available slots for claiming: ${availableForReceiver.length} of ${claimState.participantCount}`);
 
-          const targetSlot = await prompts.promptSlotFromAvailable(availableForReceiver, "Choose a slot to claim as receiver (not your own):");
+          // Create state fetcher for live polling
+          const fetchClaimState = async () => {
+            const s = await getGameState(result.contract, BigInt(result.gameId), accountAddress);
+            return { senderSlots: s.senderSlots, receiverSlots: s.receiverSlots, participantCount: s.participantCount };
+          };
+
+          const targetSlot = await prompts.promptSlotWithPolling(
+            "receiver",
+            { senderSlots: claimState.senderSlots, receiverSlots: claimState.receiverSlots, participantCount: claimState.participantCount },
+            fetchClaimState,
+            POLL_INTERVAL_MS,
+            result.senderSlot
+          );
           const claimResult = await claimAsReceiverInternal(
             wallet, accountAddress, secretKey, result.contract,
             result.gameId, targetSlot, result.senderSlot
@@ -568,14 +634,17 @@ async function registerAsSenderInternal(
   display.step(`Registering as sender for slot ${slot}...`);
 
   const paymentMethod = await getSponsoredPaymentMethod(wallet);
+  const txStart = Date.now();
   await contract
     .withWallet(wallet)
     .methods.register_as_sender(BigInt(gameId), slot, encryptionKey)
     .send({ from: callerAddress, fee: { paymentMethod } })
     .wait();
+  const txDuration = Date.now() - txStart;
 
   display.success(`Registered as sender for slot ${slot}!`);
   display.keyValue("Your slot", slot.toString());
+  display.txTiming("Transaction time", txDuration);
 
   // Wait for phase change
   const newPhase = await waitForPhaseChange(contract, BigInt(gameId), PHASE.SENDER_REGISTRATION, callerAddress);
@@ -635,6 +704,7 @@ async function claimAsReceiverInternal(
   display.step(`Claiming slot ${targetSlot} as receiver...`);
 
   const paymentMethod = await getSponsoredPaymentMethod(wallet);
+  const txStart = Date.now();
   await contract
     .withWallet(wallet)
     .methods.claim_as_receiver(
@@ -644,8 +714,10 @@ async function claimAsReceiverInternal(
     )
     .send({ from: callerAddress, fee: { paymentMethod } })
     .wait();
+  const txDuration = Date.now() - txStart;
 
   display.success(`Claimed slot ${targetSlot} as receiver!`);
+  display.txTiming("Transaction time", txDuration);
   display.info("Your encrypted delivery address has been stored.");
   display.info("The sender of slot " + targetSlot + " will send you a gift!");
 

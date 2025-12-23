@@ -5,6 +5,33 @@
 import chalk from "chalk";
 import { PHASE_NAMES } from "../services/contract.js";
 
+// Re-export chalk for use in other modules
+export { chalk };
+
+/**
+ * Format duration in milliseconds to human readable string.
+ */
+export function formatDuration(ms: number): string {
+  if (ms < 1000) {
+    return `${ms}ms`;
+  } else if (ms < 60000) {
+    const secs = (ms / 1000).toFixed(2);
+    return `${secs}s`;
+  } else {
+    const mins = Math.floor(ms / 60000);
+    const secs = ((ms % 60000) / 1000).toFixed(1);
+    return `${mins}m ${secs}s`;
+  }
+}
+
+/**
+ * Display transaction timing info.
+ */
+export function txTiming(label: string, durationMs: number): void {
+  const formatted = formatDuration(durationMs);
+  console.log(chalk.dim(`  ⏱  ${label}: `) + chalk.cyan(formatted));
+}
+
 /**
  * Print a success message.
  */
