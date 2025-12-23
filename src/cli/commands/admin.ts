@@ -15,6 +15,7 @@ import {
   connectToContract,
   getGameInfo,
   getClaimedSlots,
+  getReceiverClaimedSlots,
   PHASE,
   PHASE_NAMES,
 } from "../services/contract.js";
@@ -208,37 +209,23 @@ export async function viewStatus(
         );
       }
     } else {
-      // Original N+1 query approach
-      claimedSlots = await getClaimedSlots(
-        contract,
-        BigInt(gameId),
-        maxParticipants,
-        callerAddress
-      );
+      // Batch queries - single RPC call each
+      display.step("Fetching slot status...");
+      const queries: [Promise<number[]>, Promise<number[]>?] = [
+        getClaimedSlots(contract, BigInt(gameId), maxParticipants, callerAddress),
+      ];
+      if (phase >= PHASE.RECEIVER_CLAIM) {
+        queries.push(getReceiverClaimedSlots(contract, BigInt(gameId), maxParticipants, callerAddress));
+      }
+      const results = await Promise.all(queries);
+      claimedSlots = results[0];
+      receiverClaimedSlots = results[1] ?? [];
     }
 
     for (let slot = 1; slot <= maxParticipants; slot++) {
       const isClaimed = claimedSlots.includes(slot);
       const hasReceiver = receiverClaimedSlots.includes(slot);
-
-      if (options.events && phase >= PHASE.RECEIVER_CLAIM) {
-        // Use extended display with receiver info when using events
-        display.slotStatusExtended(slot, isClaimed, hasReceiver);
-      } else {
-        // Check for delivery data if in receiver claim phase (legacy mode)
-        let hasData = false;
-        if (phase >= PHASE.RECEIVER_CLAIM && isClaimed && !options.events) {
-          try {
-            const data = await contract.methods
-              .get_slot_delivery_data(BigInt(gameId), BigInt(slot))
-              .simulate({ from: callerAddress });
-            hasData = data[0] !== 0n;
-          } catch {
-            // No data
-          }
-        }
-        display.slotStatus(slot, isClaimed, hasData);
-      }
+      display.slotStatusExtended(slot, isClaimed, hasReceiver);
     }
     display.divider();
   }
