@@ -14,7 +14,7 @@ import { Fr } from "@aztec/aztec.js/fields";
 import type { AztecNode } from "@aztec/aztec.js/node";
 import { deriveSigningKey } from "@aztec/stdlib/keys";
 import { TestWallet } from "@aztec/test-wallet/server";
-import { connectToContract, getGameInfo, PHASE, PHASE_NAMES } from "../services/contract.js";
+import { connectToContract, getGameInfo, getClaimedSlots, getReceiverClaimedSlots, PHASE, PHASE_NAMES } from "../services/contract.js";
 import { getEncryptionPublicKey, getSponsoredPaymentMethod } from "../services/wallet.js";
 import { encryptDeliveryData, decryptDeliveryData, isEncryptedDataEmpty } from "../services/crypto.js";
 import { loadConfig, getContractAddress } from "../services/config.js";
@@ -136,27 +136,39 @@ export async function registerAsSender(
     return;
   }
 
-  // Check phase
-  const { phase, phaseName } = await getGameInfo(contract, BigInt(gameId), callerAddress);
+  // Check phase and get game info
+  const { phase, phaseName, participantCount } = await getGameInfo(contract, BigInt(gameId), callerAddress);
   if (phase !== PHASE.SENDER_REGISTRATION) {
     display.error(`Cannot register as sender. Game is in ${phaseName} phase.`);
     return;
   }
 
+  // Get all claimed slots in a single batch query
+  display.step("Fetching slot availability...");
+  const claimedSlots = await getClaimedSlots(contract, BigInt(gameId), participantCount, callerAddress);
+  const availableSlots = [];
+  for (let i = 1; i <= participantCount; i++) {
+    if (!claimedSlots.includes(i)) {
+      availableSlots.push(i);
+    }
+  }
+
+  display.info(`Available slots: ${availableSlots.length} of ${participantCount}`);
+
   // Get slot
   let slot = options.slot;
   if (!slot) {
-    slot = await prompts.promptSlot("Choose a slot number to claim:");
-  }
-
-  // Check if slot is already claimed
-  const isClaimed = await contract.methods
-    .is_slot_claimed(BigInt(gameId), slot)
-    .simulate({ from: callerAddress });
-
-  if (isClaimed) {
-    display.error(`Slot ${slot} is already claimed. Choose a different slot.`);
-    return;
+    if (availableSlots.length === 0) {
+      display.error("No available slots remaining.");
+      return;
+    }
+    slot = await prompts.promptSlotWithStatus(participantCount, claimedSlots, "Choose a slot to claim:");
+  } else {
+    // Validate provided slot is available
+    if (claimedSlots.includes(slot)) {
+      display.error(`Slot ${slot} is already claimed. Choose a different slot.`);
+      return;
+    }
   }
 
   // Get encryption public key from secret key
@@ -212,27 +224,45 @@ export async function claimAsReceiver(
     return;
   }
 
-  // Check phase
-  const { phase, phaseName } = await getGameInfo(contract, BigInt(gameId), callerAddress);
+  // Check phase and get game info
+  const { phase, phaseName, participantCount } = await getGameInfo(contract, BigInt(gameId), callerAddress);
   if (phase !== PHASE.RECEIVER_CLAIM) {
     display.error(`Cannot claim as receiver. Game is in ${phaseName} phase.`);
     return;
   }
 
+  // Get all slots status in batch queries
+  display.step("Fetching slot availability...");
+  const [claimedSlots, receiverClaimedSlots] = await Promise.all([
+    getClaimedSlots(contract, BigInt(gameId), participantCount, callerAddress),
+    getReceiverClaimedSlots(contract, BigInt(gameId), participantCount, callerAddress),
+  ]);
+
+  // Available = has a sender but no receiver yet
+  const availableForReceiver = claimedSlots.filter(slot => !receiverClaimedSlots.includes(slot));
+  display.info(`Available slots for claiming: ${availableForReceiver.length} of ${participantCount}`);
+
   // Get target slot
   let targetSlot = options.slot;
   if (!targetSlot) {
-    targetSlot = await prompts.promptSlot("Choose a slot to claim as receiver:");
-  }
-
-  // Check if slot is claimed (as sender)
-  const isClaimed = await contract.methods
-    .is_slot_claimed(BigInt(gameId), targetSlot)
-    .simulate({ from: callerAddress });
-
-  if (!isClaimed) {
-    display.error(`Slot ${targetSlot} has no sender. Choose a different slot.`);
-    return;
+    if (availableForReceiver.length === 0) {
+      display.error("No available slots to claim. All slots have receivers.");
+      return;
+    }
+    targetSlot = await prompts.promptSlotFromAvailable(
+      availableForReceiver,
+      "Choose a slot to claim as receiver (not your own!):"
+    );
+  } else {
+    // Validate provided slot
+    if (!claimedSlots.includes(targetSlot)) {
+      display.error(`Slot ${targetSlot} has no sender. Choose a different slot.`);
+      return;
+    }
+    if (receiverClaimedSlots.includes(targetSlot)) {
+      display.error(`Slot ${targetSlot} already has a receiver. Choose a different slot.`);
+      return;
+    }
   }
 
   // Get sender's encryption key for the slot
@@ -402,14 +432,28 @@ export function registerPlayerCommands(
 
         // Chain to register if phase changed
         if (result) {
-          const slot = await prompts.promptSlot("Choose a slot number to claim:");
+          // Fetch slot availability using batch query
+          const { participantCount } = await getGameInfo(result.contract, BigInt(result.gameId), accountAddress);
+          const claimedSlots = await getClaimedSlots(result.contract, BigInt(result.gameId), participantCount, accountAddress);
+          display.info(`Available slots: ${participantCount - claimedSlots.length} of ${participantCount}`);
+
+          const slot = await prompts.promptSlotWithStatus(participantCount, claimedSlots, "Choose a slot to claim:");
           const registerResult = await registerAsSenderInternal(
             wallet, accountAddress, secretKey, result.contract, result.gameId, slot
           );
 
           // Chain to claim if phase changed
           if (registerResult) {
-            const targetSlot = await prompts.promptSlot("Choose a slot to claim as receiver (not your own):");
+            // Fetch receiver slot availability using batch query
+            const { participantCount: count } = await getGameInfo(registerResult.contract, BigInt(registerResult.gameId), accountAddress);
+            const [senderSlots, receiverSlots] = await Promise.all([
+              getClaimedSlots(registerResult.contract, BigInt(registerResult.gameId), count, accountAddress),
+              getReceiverClaimedSlots(registerResult.contract, BigInt(registerResult.gameId), count, accountAddress),
+            ]);
+            const availableForReceiver = senderSlots.filter(s => !receiverSlots.includes(s));
+            display.info(`Available slots for claiming: ${availableForReceiver.length} of ${count}`);
+
+            const targetSlot = await prompts.promptSlotFromAvailable(availableForReceiver, "Choose a slot to claim as receiver (not your own):");
             const claimResult = await claimAsReceiverInternal(
               wallet, accountAddress, secretKey, registerResult.contract,
               registerResult.gameId, targetSlot, registerResult.senderSlot
@@ -442,7 +486,16 @@ export function registerPlayerCommands(
 
         // Chain to claim if phase changed
         if (result) {
-          const targetSlot = await prompts.promptSlot("Choose a slot to claim as receiver (not your own):");
+          // Fetch receiver slot availability using batch query
+          const { participantCount } = await getGameInfo(result.contract, BigInt(result.gameId), accountAddress);
+          const [senderSlots, receiverSlots] = await Promise.all([
+            getClaimedSlots(result.contract, BigInt(result.gameId), participantCount, accountAddress),
+            getReceiverClaimedSlots(result.contract, BigInt(result.gameId), participantCount, accountAddress),
+          ]);
+          const availableForReceiver = senderSlots.filter(s => !receiverSlots.includes(s));
+          display.info(`Available slots for claiming: ${availableForReceiver.length} of ${participantCount}`);
+
+          const targetSlot = await prompts.promptSlotFromAvailable(availableForReceiver, "Choose a slot to claim as receiver (not your own):");
           const claimResult = await claimAsReceiverInternal(
             wallet, accountAddress, secretKey, result.contract,
             result.gameId, targetSlot, result.senderSlot
@@ -517,12 +570,13 @@ async function registerAsSenderInternal(
   gameId: number,
   slot: number
 ): Promise<{ contract: SecretSantaContract; gameId: number; senderSlot: number } | void> {
-  // Check if slot is already claimed
-  const isClaimed = await contract.methods
-    .is_slot_claimed(BigInt(gameId), slot)
-    .simulate({ from: callerAddress });
+  // Get game info for participant count
+  const { participantCount } = await getGameInfo(contract, BigInt(gameId), callerAddress);
 
-  if (isClaimed) {
+  // Check if slot is already claimed using batch query
+  const claimedSlots = await getClaimedSlots(contract, BigInt(gameId), participantCount, callerAddress);
+
+  if (claimedSlots.includes(slot)) {
     display.error(`Slot ${slot} is already claimed. Choose a different slot.`);
     return;
   }
@@ -564,13 +618,22 @@ async function claimAsReceiverInternal(
   targetSlot: number,
   senderSlot: number
 ): Promise<{ contract: SecretSantaContract; gameId: number; senderSlot: number } | void> {
-  // Check if slot is claimed (as sender)
-  const isClaimed = await contract.methods
-    .is_slot_claimed(BigInt(gameId), targetSlot)
-    .simulate({ from: callerAddress });
+  // Get game info for participant count
+  const { participantCount } = await getGameInfo(contract, BigInt(gameId), callerAddress);
 
-  if (!isClaimed) {
+  // Check slot status using batch queries
+  const [claimedSlots, receiverClaimedSlots] = await Promise.all([
+    getClaimedSlots(contract, BigInt(gameId), participantCount, callerAddress),
+    getReceiverClaimedSlots(contract, BigInt(gameId), participantCount, callerAddress),
+  ]);
+
+  if (!claimedSlots.includes(targetSlot)) {
     display.error(`Slot ${targetSlot} has no sender. Choose a different slot.`);
+    return;
+  }
+
+  if (receiverClaimedSlots.includes(targetSlot)) {
+    display.error(`Slot ${targetSlot} already has a receiver. Choose a different slot.`);
     return;
   }
 

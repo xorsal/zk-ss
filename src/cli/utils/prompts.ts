@@ -69,6 +69,52 @@ export async function promptSlot(message: string = "Enter slot number:"): Promis
 }
 
 /**
+ * Prompt to select a slot from available slots.
+ */
+export async function promptSlotFromAvailable(
+  availableSlots: number[],
+  message: string = "Select a slot:"
+): Promise<number> {
+  if (availableSlots.length === 0) {
+    throw new Error("No available slots");
+  }
+
+  return await select({
+    message,
+    choices: availableSlots.map((slot) => ({
+      name: `Slot ${slot}`,
+      value: slot,
+    })),
+  });
+}
+
+/**
+ * Prompt to select a slot, showing which are available/taken.
+ */
+export async function promptSlotWithStatus(
+  totalSlots: number,
+  claimedSlots: number[],
+  message: string = "Select a slot:"
+): Promise<number> {
+  const claimedSet = new Set(claimedSlots);
+  const choices = [];
+
+  for (let slot = 1; slot <= totalSlots; slot++) {
+    const isClaimed = claimedSet.has(slot);
+    choices.push({
+      name: isClaimed ? `Slot ${slot} (taken)` : `Slot ${slot} (available)`,
+      value: slot,
+      disabled: isClaimed ? "(already claimed)" : false,
+    });
+  }
+
+  return await select({
+    message,
+    choices,
+  });
+}
+
+/**
  * Prompt for min/max participants.
  */
 export async function promptParticipantLimits(): Promise<{ min: number; max: number }> {

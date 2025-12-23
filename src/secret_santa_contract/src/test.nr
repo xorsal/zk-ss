@@ -369,3 +369,100 @@ unconstrained fn test_min_participants_required() {
     // Try to create game with only 2 minimum participants - SHOULD FAIL
     env.call_public(alice, SecretSanta::at(contract_address).create_game(2, 10));
 }
+
+/// Test batch query for claimed slots
+#[test]
+unconstrained fn test_batch_query_claimed_slots() {
+    let mut env = TestEnvironment::new();
+
+    let alice = env.create_light_account();
+    let bob = env.create_light_account();
+    let carol = env.create_light_account();
+
+    let alice_key = derive_encryption_keypair_from_account(alice);
+    let bob_key = derive_encryption_keypair_from_account(bob);
+    let carol_key = derive_encryption_keypair_from_account(carol);
+
+    let contract_address = deploy_secret_santa(&mut env, alice);
+    let game_id: Field = 1;
+
+    // Create game and enroll 3 participants
+    env.call_public(alice, SecretSanta::at(contract_address).create_game(3, 10));
+    env.call_private(alice, SecretSanta::at(contract_address).enroll(game_id));
+    env.call_private(bob, SecretSanta::at(contract_address).enroll(game_id));
+    env.call_private(carol, SecretSanta::at(contract_address).enroll(game_id));
+
+    // Advance to sender registration
+    env.call_public(alice, SecretSanta::at(contract_address).advance_phase(game_id));
+
+    // Before any slots are claimed, batch query should return all false
+    let slots_before =
+        env.simulate_utility(SecretSanta::at(contract_address).get_all_claimed_slots(game_id, 3));
+    assert(!slots_before[0], "Slot 1 should not be claimed yet");
+    assert(!slots_before[1], "Slot 2 should not be claimed yet");
+    assert(!slots_before[2], "Slot 3 should not be claimed yet");
+
+    // Alice claims slot 1
+    env.call_private(
+        alice,
+        SecretSanta::at(contract_address).register_as_sender(game_id, 1, alice_key),
+    );
+
+    // After Alice claims, batch query should show slot 1 as claimed
+    let slots_after_alice =
+        env.simulate_utility(SecretSanta::at(contract_address).get_all_claimed_slots(game_id, 3));
+    assert(slots_after_alice[0], "Slot 1 should be claimed after Alice");
+    assert(!slots_after_alice[1], "Slot 2 should not be claimed yet");
+    assert(!slots_after_alice[2], "Slot 3 should not be claimed yet");
+
+    // Bob claims slot 2, Carol claims slot 3
+    env.call_private(
+        bob,
+        SecretSanta::at(contract_address).register_as_sender(game_id, 2, bob_key),
+    );
+    env.call_private(
+        carol,
+        SecretSanta::at(contract_address).register_as_sender(game_id, 3, carol_key),
+    );
+
+    // All slots should now be claimed
+    let slots_final =
+        env.simulate_utility(SecretSanta::at(contract_address).get_all_claimed_slots(game_id, 3));
+    assert(slots_final[0], "Slot 1 should be claimed");
+    assert(slots_final[1], "Slot 2 should be claimed");
+    assert(slots_final[2], "Slot 3 should be claimed");
+
+    // Advance to receiver claim and test receiver batch query
+    env.call_public(alice, SecretSanta::at(contract_address).advance_phase(game_id));
+
+    // Before any receiver claims
+    let receiver_slots_before = env.simulate_utility(
+        SecretSanta::at(contract_address).get_all_receiver_claimed_slots(game_id, 3),
+    );
+    assert(!receiver_slots_before[0], "Receiver slot 1 should not be claimed yet");
+    assert(!receiver_slots_before[1], "Receiver slot 2 should not be claimed yet");
+    assert(!receiver_slots_before[2], "Receiver slot 3 should not be claimed yet");
+
+    // Each claims a different slot (not their own)
+    let delivery_data: [Field; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
+    env.call_private(
+        alice,
+        SecretSanta::at(contract_address).claim_as_receiver(game_id, 2, delivery_data),
+    );
+    env.call_private(
+        bob,
+        SecretSanta::at(contract_address).claim_as_receiver(game_id, 3, delivery_data),
+    );
+    env.call_private(
+        carol,
+        SecretSanta::at(contract_address).claim_as_receiver(game_id, 1, delivery_data),
+    );
+
+    // All receiver slots should now be claimed
+    let receiver_slots_final = env.simulate_utility(
+        SecretSanta::at(contract_address).get_all_receiver_claimed_slots(game_id, 3),
+    );
+    assert(receiver_slots_final[0], "Receiver slot 1 should be claimed");
+    assert(receiver_slots_final[1], "Receiver slot 2 should be claimed");
+    assert(receiver_slots_final[2], "Receiver slot 3 should be claimed");
+}

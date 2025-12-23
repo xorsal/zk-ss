@@ -362,6 +362,32 @@ pub contract SecretSanta {
         self.storage.max_participants.at(game_id).read()
     }
 
+    /// Get all claimed slots for a game in a single call (supports up to 128 slots)
+    #[external("utility")]
+    unconstrained fn get_all_claimed_slots(game_id: Field, max_slots: u32) -> [bool; 128] {
+        let mut result: [bool; 128] = [false; 128];
+        for i in 0..128 {
+            if i < max_slots {
+                let slot = (i + 1) as Field;
+                result[i] = self.storage.slot_claimed.at(game_id).at(slot).read();
+            }
+        }
+        result
+    }
+
+    /// Get all receiver-claimed slots for a game in a single call (supports up to 128 slots)
+    #[external("utility")]
+    unconstrained fn get_all_receiver_claimed_slots(game_id: Field, max_slots: u32) -> [bool; 128] {
+        let mut result: [bool; 128] = [false; 128];
+        for i in 0..128 {
+            if i < max_slots {
+                let slot = (i + 1) as Field;
+                result[i] = self.storage.slot_receiver_claimed.at(game_id).at(slot).read();
+            }
+        }
+        result
+    }
+
     #[external("public")]
     #[view]
     fn get_admin() -> pub AztecAddress {
