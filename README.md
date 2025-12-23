@@ -2,6 +2,13 @@
 
 Privacy-preserving Secret Santa on Aztec. Nobody knows who sends to whom.
 
+## Game Phases
+
+1. **JOIN** - Players enroll in the game
+2. **CLAIM** - Players pick a sender slot (register)
+3. **MATCH** - Players pick a receiver slot (claim someone else's slot)
+4. **REVEAL** - Game complete, senders can view their recipient's delivery address
+
 ## Install
 
 ```bash
