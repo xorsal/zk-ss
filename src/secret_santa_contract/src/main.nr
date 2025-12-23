@@ -388,6 +388,35 @@ pub contract SecretSanta {
         result
     }
 
+    /// Get complete game state in a single call
+    /// Returns: (phase, participant_count, max_participants, sender_count, receiver_count, sender_slots[128], receiver_slots[128])
+    #[external("utility")]
+    unconstrained fn get_game_state(game_id: Field) -> (u8, u32, u32, u32, u32, [bool; 128], [bool; 128]) {
+        let phase = self.storage.game_phases.at(game_id).read();
+        let participant_count = self.storage.participant_counts.at(game_id).read();
+        let max_participants = self.storage.max_participants.at(game_id).read();
+        let receiver_count = self.storage.receiver_claim_counts.at(game_id).read();
+
+        let mut sender_slots: [bool; 128] = [false; 128];
+        let mut receiver_slots: [bool; 128] = [false; 128];
+        let mut sender_count: u32 = 0;
+
+        for i in 0..128 {
+            if i < max_participants {
+                let slot = (i + 1) as Field;
+                let is_sender = self.storage.slot_claimed.at(game_id).at(slot).read();
+                let is_receiver = self.storage.slot_receiver_claimed.at(game_id).at(slot).read();
+                sender_slots[i] = is_sender;
+                receiver_slots[i] = is_receiver;
+                if is_sender {
+                    sender_count += 1;
+                }
+            }
+        }
+
+        (phase, participant_count, max_participants, sender_count, receiver_count, sender_slots, receiver_slots)
+    }
+
     #[external("public")]
     #[view]
     fn get_admin() -> pub AztecAddress {

@@ -118,6 +118,53 @@ export async function getGameInfo(
 }
 
 /**
+ * Complete game state in a single RPC call.
+ */
+export interface GameState {
+  phase: number;
+  phaseName: string;
+  participantCount: number;
+  maxParticipants: number;
+  senderCount: number;
+  receiverCount: number;
+  senderSlots: number[];
+  receiverSlots: number[];
+}
+
+/**
+ * Get complete game state in a single RPC call.
+ */
+export async function getGameState(
+  contract: SecretSantaContract,
+  gameId: bigint,
+  caller: AztecAddress
+): Promise<GameState> {
+  const result = await contract.methods.get_game_state(gameId).simulate({ from: caller });
+
+  // Result is a tuple: (phase, participant_count, max_participants, sender_count, receiver_count, sender_slots[128], receiver_slots[128])
+  const [phase, participantCount, maxParticipants, senderCount, receiverCount, senderSlotsArr, receiverSlotsArr] = result;
+
+  // Convert boolean arrays to slot number arrays
+  const senderSlots: number[] = [];
+  const receiverSlots: number[] = [];
+  for (let i = 0; i < Number(maxParticipants); i++) {
+    if (senderSlotsArr[i]) senderSlots.push(i + 1);
+    if (receiverSlotsArr[i]) receiverSlots.push(i + 1);
+  }
+
+  return {
+    phase: Number(phase),
+    phaseName: PHASE_NAMES[Number(phase)] || "Unknown",
+    participantCount: Number(participantCount),
+    maxParticipants: Number(maxParticipants),
+    senderCount: Number(senderCount),
+    receiverCount: Number(receiverCount),
+    senderSlots,
+    receiverSlots,
+  };
+}
+
+/**
  * Get slot information for a game.
  */
 export async function getSlotInfo(
