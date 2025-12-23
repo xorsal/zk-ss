@@ -2,8 +2,6 @@
 node_modules/
 
 # Build artifacts
-artifacts/
-target/
 dist/
 codegenCache.json
 
