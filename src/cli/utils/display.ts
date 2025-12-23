@@ -195,3 +195,164 @@ export function watchHeader(gameId: number): void {
   console.log(chalk.gray("Press Ctrl+C to stop"));
   console.log("");
 }
+
+// ============================================
+// Live Display Utilities
+// ============================================
+
+/**
+ * ANSI escape codes for cursor control.
+ */
+const ANSI = {
+  clearScreen: "\x1b[2J",
+  moveTo: (row: number, col: number) => `\x1b[${row};${col}H`,
+  moveUp: (n: number) => `\x1b[${n}A`,
+  clearLine: "\x1b[2K",
+  hideCursor: "\x1b[?25l",
+  showCursor: "\x1b[?25h",
+  saveCursor: "\x1b[s",
+  restoreCursor: "\x1b[u",
+};
+
+/**
+ * Live display state for in-place updates.
+ */
+let liveLineCount = 0;
+
+/**
+ * Clear the live display area (move up and clear lines).
+ */
+export function clearLiveArea(): void {
+  if (liveLineCount > 0) {
+    process.stdout.write(ANSI.moveUp(liveLineCount));
+    for (let i = 0; i < liveLineCount; i++) {
+      process.stdout.write(ANSI.clearLine + "\n");
+    }
+    process.stdout.write(ANSI.moveUp(liveLineCount));
+    liveLineCount = 0;
+  }
+}
+
+/**
+ * Write lines to the live area (tracks line count for clearing).
+ */
+export function writeLive(lines: string[]): void {
+  clearLiveArea();
+  for (const line of lines) {
+    console.log(line);
+  }
+  liveLineCount = lines.length;
+}
+
+/**
+ * Render a slot as a visual cell.
+ */
+function renderSlot(slot: number, senderClaimed: boolean, receiverClaimed: boolean): string {
+  if (receiverClaimed) {
+    return chalk.bgGreen.black(` ${slot.toString().padStart(2)} `);
+  } else if (senderClaimed) {
+    return chalk.bgYellow.black(` ${slot.toString().padStart(2)} `);
+  } else {
+    return chalk.bgGray.white(` ${slot.toString().padStart(2)} `);
+  }
+}
+
+/**
+ * Render a visual slot grid for live display.
+ */
+export function renderSlotGrid(
+  maxSlots: number,
+  senderSlots: number[],
+  receiverSlots: number[],
+  slotsPerRow: number = 8
+): string[] {
+  const senderSet = new Set(senderSlots);
+  const receiverSet = new Set(receiverSlots);
+  const lines: string[] = [];
+
+  lines.push("");
+  lines.push(chalk.bold("  Slot Status"));
+  lines.push("");
+
+  // Build rows
+  for (let row = 0; row < Math.ceil(maxSlots / slotsPerRow); row++) {
+    let rowStr = "  ";
+    for (let col = 0; col < slotsPerRow; col++) {
+      const slot = row * slotsPerRow + col + 1;
+      if (slot <= maxSlots) {
+        rowStr += renderSlot(slot, senderSet.has(slot), receiverSet.has(slot)) + " ";
+      }
+    }
+    lines.push(rowStr);
+  }
+
+  lines.push("");
+  lines.push(
+    "  " +
+    chalk.bgGray.white(" ## ") + " Available  " +
+    chalk.bgYellow.black(" ## ") + " Sender  " +
+    chalk.bgGreen.black(" ## ") + " Complete"
+  );
+  lines.push("");
+
+  return lines;
+}
+
+/**
+ * Render game status for live display.
+ */
+export function renderGameStatus(
+  gameId: number,
+  phase: number,
+  participantCount: number,
+  maxParticipants: number,
+  senderCount: number,
+  receiverCount: number
+): string[] {
+  const lines: string[] = [];
+  const phaseName = PHASE_NAMES[phase] || "Unknown";
+
+  lines.push(chalk.bold.bgBlue.white(` Game #${gameId} `) + "  " + chalk.cyan(phaseName));
+  lines.push("");
+  lines.push(`  Enrolled: ${participantCount}/${maxParticipants}  |  Senders: ${senderCount}  |  Receivers: ${receiverCount}`);
+
+  return lines;
+}
+
+/**
+ * Render full live dashboard.
+ */
+export function renderLiveDashboard(
+  gameId: number,
+  phase: number,
+  participantCount: number,
+  maxParticipants: number,
+  senderSlots: number[],
+  receiverSlots: number[],
+  lastUpdate: Date
+): string[] {
+  const lines: string[] = [];
+
+  // Header with timestamp
+  lines.push(chalk.gray("─".repeat(50)));
+  lines.push(...renderGameStatus(gameId, phase, participantCount, maxParticipants, senderSlots.length, receiverSlots.length));
+  lines.push(...renderSlotGrid(maxParticipants, senderSlots, receiverSlots));
+  lines.push(chalk.gray(`  Last update: ${lastUpdate.toLocaleTimeString()}`));
+  lines.push(chalk.gray("─".repeat(50)));
+
+  return lines;
+}
+
+/**
+ * Hide cursor for cleaner live display.
+ */
+export function hideCursor(): void {
+  process.stdout.write(ANSI.hideCursor);
+}
+
+/**
+ * Show cursor (call on exit).
+ */
+export function showCursor(): void {
+  process.stdout.write(ANSI.showCursor);
+}
