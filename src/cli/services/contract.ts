@@ -149,7 +149,7 @@ export async function getSlotInfo(
 }
 
 /**
- * Get all claimed slots for a game.
+ * Get all claimed slots for a game (batch query - single RPC call).
  */
 export async function getClaimedSlots(
   contract: SecretSantaContract,
@@ -157,14 +157,37 @@ export async function getClaimedSlots(
   maxSlots: number,
   caller: AztecAddress
 ): Promise<number[]> {
-  const claimedSlots: number[] = [];
+  const allSlots = await contract.methods
+    .get_all_claimed_slots(gameId, maxSlots)
+    .simulate({ from: caller });
 
-  for (let slot = 1; slot <= maxSlots; slot++) {
-    const isClaimed = await contract.methods
-      .is_slot_claimed(gameId, slot)
-      .simulate({ from: caller });
-    if (isClaimed) {
-      claimedSlots.push(slot);
+  const claimedSlots: number[] = [];
+  for (let i = 0; i < maxSlots; i++) {
+    if (allSlots[i]) {
+      claimedSlots.push(i + 1); // Slots are 1-indexed
+    }
+  }
+
+  return claimedSlots;
+}
+
+/**
+ * Get all receiver-claimed slots for a game (batch query - single RPC call).
+ */
+export async function getReceiverClaimedSlots(
+  contract: SecretSantaContract,
+  gameId: bigint,
+  maxSlots: number,
+  caller: AztecAddress
+): Promise<number[]> {
+  const allSlots = await contract.methods
+    .get_all_receiver_claimed_slots(gameId, maxSlots)
+    .simulate({ from: caller });
+
+  const claimedSlots: number[] = [];
+  for (let i = 0; i < maxSlots; i++) {
+    if (allSlots[i]) {
+      claimedSlots.push(i + 1); // Slots are 1-indexed
     }
   }
 
