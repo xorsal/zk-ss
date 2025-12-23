@@ -1,6 +1,6 @@
 use crate::SecretSanta;
 use crate::types::{
-    PHASE_COMPLETED, PHASE_ENROLLMENT, PHASE_RECEIVER_CLAIM, PHASE_SENDER_REGISTRATION,
+    PHASE_JOIN, PHASE_CLAIM, PHASE_MATCH, PHASE_REVEAL,
 };
 
 use dep::aztec::{
@@ -80,7 +80,7 @@ unconstrained fn test_full_secret_santa_game() {
 
     // Verify initial phase is ENROLLMENT
     let phase = env.simulate_utility(SecretSanta::at(contract_address).get_game_phase(game_id));
-    assert(phase == PHASE_ENROLLMENT as u8, "Should be in ENROLLMENT phase");
+    assert(phase == PHASE_JOIN as u8, "Should be in JOIN phase");
 
     // ============================================================
     // STEP 3: Enroll 3 participants
@@ -100,7 +100,7 @@ unconstrained fn test_full_secret_santa_game() {
     env.call_public(alice, SecretSanta::at(contract_address).advance_phase(game_id));
 
     let phase = env.simulate_utility(SecretSanta::at(contract_address).get_game_phase(game_id));
-    assert(phase == PHASE_SENDER_REGISTRATION as u8, "Should be in SENDER_REGISTRATION phase");
+    assert(phase == PHASE_CLAIM as u8, "Should be in CLAIM phase");
 
     // ============================================================
     // STEP 5: Each participant registers as sender with slot + encryption key
@@ -155,7 +155,7 @@ unconstrained fn test_full_secret_santa_game() {
     env.call_public(alice, SecretSanta::at(contract_address).advance_phase(game_id));
 
     let phase = env.simulate_utility(SecretSanta::at(contract_address).get_game_phase(game_id));
-    assert(phase == PHASE_RECEIVER_CLAIM as u8, "Should be in RECEIVER_CLAIM phase");
+    assert(phase == PHASE_MATCH as u8, "Should be in MATCH phase");
 
     // ============================================================
     // STEP 7: Each participant claims a different slot (not their own)
@@ -223,7 +223,7 @@ unconstrained fn test_full_secret_santa_game() {
     env.call_public(alice, SecretSanta::at(contract_address).advance_phase(game_id));
 
     let phase = env.simulate_utility(SecretSanta::at(contract_address).get_game_phase(game_id));
-    assert(phase == PHASE_COMPLETED as u8, "Should be in COMPLETED phase");
+    assert(phase == PHASE_REVEAL as u8, "Should be in REVEAL phase");
 
     // ============================================================
     // VERIFICATION: Final state

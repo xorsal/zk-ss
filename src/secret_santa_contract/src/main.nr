@@ -27,7 +27,7 @@ pub contract SecretSanta {
 
     use crate::types::{
         NULLIFIER_DOMAIN_ENROLLMENT, NULLIFIER_DOMAIN_RECEIVER, NULLIFIER_DOMAIN_SENDER,
-        PHASE_COMPLETED, PHASE_ENROLLMENT, PHASE_RECEIVER_CLAIM, PHASE_SENDER_REGISTRATION,
+        PHASE_JOIN, PHASE_CLAIM, PHASE_MATCH, PHASE_REVEAL,
         participant_note::ParticipantNote, receiver_note::ReceiverNote, sender_note::SenderNote,
     };
 
@@ -121,7 +121,7 @@ pub contract SecretSanta {
 
         let game_id = self.storage.next_game_id.read();
 
-        self.storage.game_phases.at(game_id).write(PHASE_ENROLLMENT);
+        self.storage.game_phases.at(game_id).write(PHASE_JOIN);
         self.storage.participant_counts.at(game_id).write(0);
         self.storage.max_participants.at(game_id).write(max_participants_param);
         self.storage.next_game_id.write(game_id + 1);
@@ -135,12 +135,12 @@ pub contract SecretSanta {
         assert(caller.eq(self.storage.admin.read()), "Only admin can advance phases");
         let current_phase = self.storage.game_phases.at(game_id).read();
 
-        if current_phase == PHASE_ENROLLMENT {
+        if current_phase == PHASE_JOIN {
             // Verify minimum participants before advancing
             let count = self.storage.participant_counts.at(game_id).read();
             assert(count >= 3, "Need at least 3 participants to start");
-            self.storage.game_phases.at(game_id).write(PHASE_SENDER_REGISTRATION);
-        } else if current_phase == PHASE_SENDER_REGISTRATION {
+            self.storage.game_phases.at(game_id).write(PHASE_CLAIM);
+        } else if current_phase == PHASE_CLAIM {
             // Verify all participants have registered as senders
             let participant_count = self.storage.participant_counts.at(game_id).read();
             let sender_count = self.storage.sender_registration_counts.at(game_id).read();
@@ -148,8 +148,8 @@ pub contract SecretSanta {
                 sender_count == participant_count,
                 "Not all participants have registered as senders",
             );
-            self.storage.game_phases.at(game_id).write(PHASE_RECEIVER_CLAIM);
-        } else if current_phase == PHASE_RECEIVER_CLAIM {
+            self.storage.game_phases.at(game_id).write(PHASE_MATCH);
+        } else if current_phase == PHASE_MATCH {
             // Verify all slots have receivers before completing
             let participant_count = self.storage.participant_counts.at(game_id).read();
             let receiver_count = self.storage.receiver_claim_counts.at(game_id).read();
@@ -157,7 +157,7 @@ pub contract SecretSanta {
                 receiver_count == participant_count,
                 "Not all participants have claimed a receiver slot",
             );
-            self.storage.game_phases.at(game_id).write(PHASE_COMPLETED);
+            self.storage.game_phases.at(game_id).write(PHASE_REVEAL);
         } else {
             assert(false, "Cannot advance from current phase");
         }
@@ -167,7 +167,7 @@ pub contract SecretSanta {
     #[only_self]
     fn _increment_participant_count(game_id: Field) {
         let phase = self.storage.game_phases.at(game_id).read();
-        assert(phase == PHASE_ENROLLMENT, "Not in enrollment phase");
+        assert(phase == PHASE_JOIN, "Not in join phase");
 
         let max_p = self.storage.max_participants.at(game_id).read();
         let current_count = self.storage.participant_counts.at(game_id).read();
@@ -179,7 +179,7 @@ pub contract SecretSanta {
     #[only_self]
     fn _try_claim_slot(game_id: Field, slot: u32, encryption_key: Point) {
         let phase = self.storage.game_phases.at(game_id).read();
-        assert(phase == PHASE_SENDER_REGISTRATION, "Not in sender registration phase");
+        assert(phase == PHASE_CLAIM, "Not in claim phase");
 
         let participant_count = self.storage.participant_counts.at(game_id).read();
 
@@ -213,7 +213,7 @@ pub contract SecretSanta {
     #[only_self]
     fn _mark_receiver_claim(game_id: Field, slot: u32) {
         let phase = self.storage.game_phases.at(game_id).read();
-        assert(phase == PHASE_RECEIVER_CLAIM, "Not in receiver claim phase");
+        assert(phase == PHASE_MATCH, "Not in match phase");
 
         let slot_has_sender = self.storage.slot_claimed.at(game_id).at(slot as Field).read();
         assert(slot_has_sender, "Slot has no sender registered");

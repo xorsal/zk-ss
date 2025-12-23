@@ -81,7 +81,7 @@ export async function createGame(
   display.txTiming("Transaction time", txDuration);
   display.keyValue("Min participants", min.toString());
   display.keyValue("Max participants", max.toString());
-  display.keyValue("Phase", PHASE_NAMES[PHASE.ENROLLMENT]);
+  display.keyValue("Phase", PHASE_NAMES[PHASE.JOIN]);
   display.info(`Game ID saved. Use 'yarn cli status' to check game status.`);
 }
 
@@ -116,7 +116,7 @@ export async function advancePhase(
     callerAddress
   );
 
-  if (currentPhase === PHASE.COMPLETED) {
+  if (currentPhase === PHASE.REVEAL) {
     display.warn(`Game #${gameId} is already completed.`);
     return;
   }
@@ -174,7 +174,7 @@ export async function viewStatus(
   display.gameStatus(gameId, state.phase, state.participantCount, state.maxParticipants);
 
   // If in sender registration or later, show slots
-  if (state.phase >= PHASE.SENDER_REGISTRATION) {
+  if (state.phase >= PHASE.CLAIM) {
     display.header("Slot Status");
 
     for (let slot = 1; slot <= state.maxParticipants; slot++) {
@@ -188,19 +188,19 @@ export async function viewStatus(
   // Show next actions based on phase
   display.header("Next Actions");
   switch (state.phase) {
-    case PHASE.ENROLLMENT:
+    case PHASE.JOIN:
       display.info(`Players can enroll with: yarn cli enroll --game ${gameId}`);
       display.info(`Admin can advance phase with: yarn cli admin advance --game ${gameId}`);
       break;
-    case PHASE.SENDER_REGISTRATION:
+    case PHASE.CLAIM:
       display.info(`Players can register as senders: yarn cli register --slot <n>`);
       display.info(`Admin can advance phase after all players register.`);
       break;
-    case PHASE.RECEIVER_CLAIM:
+    case PHASE.MATCH:
       display.info(`Players can claim as receivers: yarn cli claim --slot <n>`);
       display.info(`Admin can complete game after all players claim.`);
       break;
-    case PHASE.COMPLETED:
+    case PHASE.REVEAL:
       display.info(`Game complete! Senders can view delivery data: yarn cli delivery`);
       break;
   }
@@ -248,14 +248,14 @@ export async function interactiveDashboard(
     }
 
     // Phase info with color coding
-    const phaseColor = currentState.phase === PHASE.COMPLETED
+    const phaseColor = currentState.phase === PHASE.REVEAL
       ? display.chalk.green
       : display.chalk.yellow;
     console.log(`  Phase: ${phaseColor.bold(currentState.phaseName)}`);
     console.log("");
 
     // Progress bar based on phase
-    const phaseProgress = ["ENROLLMENT", "SENDER_REGISTRATION", "RECEIVER_CLAIM", "COMPLETED"];
+    const phaseProgress = ["JOIN", "CLAIM", "MATCH", "REVEAL"];
     const progressBar = phaseProgress.map((p, i) => {
       if (i < currentState!.phase) return display.chalk.green("●");
       if (i === currentState!.phase) return display.chalk.yellow("◉");
@@ -269,14 +269,14 @@ export async function interactiveDashboard(
     console.log(`  Participants: ${display.chalk.cyan(currentState.participantCount.toString())} / ${currentState.maxParticipants}`);
 
     // Phase-specific stats
-    if (currentState.phase >= PHASE.SENDER_REGISTRATION) {
+    if (currentState.phase >= PHASE.CLAIM) {
       const senderProgress = currentState.senderCount;
       const senderTotal = currentState.participantCount;
       const senderPct = senderTotal > 0 ? Math.round((senderProgress / senderTotal) * 100) : 0;
       console.log(`  Senders Registered: ${display.chalk.cyan(senderProgress.toString())} / ${senderTotal} (${senderPct}%)`);
     }
 
-    if (currentState.phase >= PHASE.RECEIVER_CLAIM) {
+    if (currentState.phase >= PHASE.MATCH) {
       const receiverProgress = currentState.receiverCount;
       const receiverTotal = currentState.participantCount;
       const receiverPct = receiverTotal > 0 ? Math.round((receiverProgress / receiverTotal) * 100) : 0;
@@ -286,7 +286,7 @@ export async function interactiveDashboard(
     console.log("");
 
     // Slot grid (if applicable)
-    if (currentState.phase >= PHASE.SENDER_REGISTRATION) {
+    if (currentState.phase >= PHASE.CLAIM) {
       console.log(`  ${display.chalk.dim("Slot Grid:")}`);
       const grid = display.renderSlotGrid(
         currentState.maxParticipants,
@@ -303,25 +303,25 @@ export async function interactiveDashboard(
     let canAdvance = false;
     let advanceHint = "";
     switch (currentState.phase) {
-      case PHASE.ENROLLMENT:
+      case PHASE.JOIN:
         canAdvance = currentState.participantCount >= 3; // Assuming min 3
         advanceHint = canAdvance
           ? display.chalk.green("Ready to advance to Sender Registration")
           : display.chalk.yellow(`Need at least 3 participants (have ${currentState.participantCount})`);
         break;
-      case PHASE.SENDER_REGISTRATION:
+      case PHASE.CLAIM:
         canAdvance = currentState.senderCount === currentState.participantCount;
         advanceHint = canAdvance
           ? display.chalk.green("All senders registered! Ready to advance")
           : display.chalk.yellow(`Waiting for ${currentState.participantCount - currentState.senderCount} more senders`);
         break;
-      case PHASE.RECEIVER_CLAIM:
+      case PHASE.MATCH:
         canAdvance = currentState.receiverCount === currentState.participantCount;
         advanceHint = canAdvance
           ? display.chalk.green("All receivers claimed! Ready to complete")
           : display.chalk.yellow(`Waiting for ${currentState.participantCount - currentState.receiverCount} more receivers`);
         break;
-      case PHASE.COMPLETED:
+      case PHASE.REVEAL:
         advanceHint = display.chalk.green("Game completed!");
         break;
     }
@@ -340,7 +340,7 @@ export async function interactiveDashboard(
 
     // Controls
     console.log(display.chalk.dim("  ─────────────────────────────────────"));
-    if (currentState.phase !== PHASE.COMPLETED) {
+    if (currentState.phase !== PHASE.REVEAL) {
       if (isAdvancing) {
         console.log(`  ${display.chalk.yellow("Advancing phase...")} `);
       } else {
@@ -365,7 +365,7 @@ export async function interactiveDashboard(
 
   // Advance phase
   const doAdvance = async () => {
-    if (isAdvancing || !currentState || currentState.phase === PHASE.COMPLETED) return;
+    if (isAdvancing || !currentState || currentState.phase === PHASE.REVEAL) return;
 
     isAdvancing = true;
     statusMessage = display.chalk.yellow("Submitting transaction...");

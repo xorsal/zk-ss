@@ -151,7 +151,7 @@ async function watchGameEvents(
         const numBlocks = currentBlock - lastBlockNumber;
 
         // Check for slot claimed events (sender registration)
-        if (currentPhase >= PHASE.SENDER_REGISTRATION) {
+        if (currentPhase >= PHASE.CLAIM) {
           try {
             const slotEvents = await getSlotClaimedEvents(node, lastBlockNumber, numBlocks);
 
@@ -167,7 +167,7 @@ async function watchGameEvents(
         }
 
         // Check for receiver claimed events
-        if (currentPhase >= PHASE.RECEIVER_CLAIM) {
+        if (currentPhase >= PHASE.MATCH) {
           try {
             const receiverEvents = await getReceiverClaimedEvents(node, lastBlockNumber, numBlocks);
 

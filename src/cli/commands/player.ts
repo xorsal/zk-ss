@@ -86,7 +86,7 @@ export async function enroll(
 
   // Check phase
   const { phase, phaseName } = await getGameInfo(contract, BigInt(gameId), callerAddress);
-  if (phase !== PHASE.ENROLLMENT) {
+  if (phase !== PHASE.JOIN) {
     display.error(`Cannot enroll. Game is in ${phaseName} phase.`);
     return;
   }
@@ -106,9 +106,9 @@ export async function enroll(
   display.txTiming("Transaction time", txDuration);
 
   // Wait for phase change
-  const newPhase = await waitForPhaseChange(contract, BigInt(gameId), PHASE.ENROLLMENT, callerAddress);
+  const newPhase = await waitForPhaseChange(contract, BigInt(gameId), PHASE.JOIN, callerAddress);
 
-  if (newPhase === PHASE.SENDER_REGISTRATION) {
+  if (newPhase === PHASE.CLAIM) {
     display.info("You can now register as a sender. Pick a slot number.");
     return { contract, gameId };
   }
@@ -142,7 +142,7 @@ export async function registerAsSender(
   // Get full game state in single RPC call
   display.step("Fetching game state...");
   const state = await getGameState(contract, BigInt(gameId), callerAddress);
-  if (state.phase !== PHASE.SENDER_REGISTRATION) {
+  if (state.phase !== PHASE.CLAIM) {
     display.error(`Cannot register as sender. Game is in ${state.phaseName} phase.`);
     return;
   }
@@ -205,9 +205,9 @@ export async function registerAsSender(
   display.txTiming("Transaction time", txDuration);
 
   // Wait for phase change
-  const newPhase = await waitForPhaseChange(contract, BigInt(gameId), PHASE.SENDER_REGISTRATION, callerAddress);
+  const newPhase = await waitForPhaseChange(contract, BigInt(gameId), PHASE.CLAIM, callerAddress);
 
-  if (newPhase === PHASE.RECEIVER_CLAIM) {
+  if (newPhase === PHASE.MATCH) {
     display.info("You can now claim as a receiver. Pick a DIFFERENT slot (not your own).");
     return { contract, gameId, senderSlot: slot };
   }
@@ -244,7 +244,7 @@ export async function claimAsReceiver(
   // Get full game state in single RPC call
   display.step("Fetching game state...");
   const state = await getGameState(contract, BigInt(gameId), callerAddress);
-  if (state.phase !== PHASE.RECEIVER_CLAIM) {
+  if (state.phase !== PHASE.MATCH) {
     display.error(`Cannot claim as receiver. Game is in ${state.phaseName} phase.`);
     return;
   }
@@ -341,9 +341,9 @@ export async function claimAsReceiver(
   }
 
   // Wait for phase change
-  const newPhase = await waitForPhaseChange(contract, BigInt(gameId), PHASE.RECEIVER_CLAIM, callerAddress);
+  const newPhase = await waitForPhaseChange(contract, BigInt(gameId), PHASE.MATCH, callerAddress);
 
-  if (newPhase === PHASE.COMPLETED) {
+  if (newPhase === PHASE.REVEAL) {
     display.info("Game complete! You can now view your recipient's delivery address.");
     return { contract, gameId, senderSlot };
   }
@@ -376,7 +376,7 @@ export async function viewDeliveryData(
 
   // Check phase
   const { phase, phaseName } = await getGameInfo(contract, BigInt(gameId), callerAddress);
-  if (phase < PHASE.RECEIVER_CLAIM) {
+  if (phase < PHASE.MATCH) {
     display.error(`No delivery data yet. Game is in ${phaseName} phase.`);
     return;
   }
@@ -647,9 +647,9 @@ async function registerAsSenderInternal(
   display.txTiming("Transaction time", txDuration);
 
   // Wait for phase change
-  const newPhase = await waitForPhaseChange(contract, BigInt(gameId), PHASE.SENDER_REGISTRATION, callerAddress);
+  const newPhase = await waitForPhaseChange(contract, BigInt(gameId), PHASE.CLAIM, callerAddress);
 
-  if (newPhase === PHASE.RECEIVER_CLAIM) {
+  if (newPhase === PHASE.MATCH) {
     display.info("You can now claim as a receiver. Pick a DIFFERENT slot (not your own).");
     return { contract, gameId, senderSlot: slot };
   }
@@ -722,9 +722,9 @@ async function claimAsReceiverInternal(
   display.info("The sender of slot " + targetSlot + " will send you a gift!");
 
   // Wait for phase change
-  const newPhase = await waitForPhaseChange(contract, BigInt(gameId), PHASE.RECEIVER_CLAIM, callerAddress);
+  const newPhase = await waitForPhaseChange(contract, BigInt(gameId), PHASE.MATCH, callerAddress);
 
-  if (newPhase === PHASE.COMPLETED) {
+  if (newPhase === PHASE.REVEAL) {
     display.info("Game complete! You can now view your recipient's delivery address.");
     return { contract, gameId, senderSlot };
   }

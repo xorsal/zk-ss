@@ -17,17 +17,17 @@ import { getSponsoredPaymentMethod } from "./wallet.js";
 
 // Game phase constants (must match contract)
 export const PHASE = {
-  ENROLLMENT: 1,
-  SENDER_REGISTRATION: 2,
-  RECEIVER_CLAIM: 3,
-  COMPLETED: 4,
+  JOIN: 1,
+  CLAIM: 2,
+  MATCH: 3,
+  REVEAL: 4,
 } as const;
 
 export const PHASE_NAMES: Record<number, string> = {
-  [PHASE.ENROLLMENT]: "Enrollment",
-  [PHASE.SENDER_REGISTRATION]: "Sender Registration",
-  [PHASE.RECEIVER_CLAIM]: "Receiver Claim",
-  [PHASE.COMPLETED]: "Completed",
+  [PHASE.JOIN]: "Join",
+  [PHASE.CLAIM]: "Claim",
+  [PHASE.MATCH]: "Match",
+  [PHASE.REVEAL]: "Reveal",
 };
 
 /**
