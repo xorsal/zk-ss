@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ZK Secret Santa</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      max-width: 600px;
+      margin: 0 auto;
+      padding: 20px;
+      background: #f5f5f5;
+    }
+    h1 {
+      text-align: center;
+      color: #c41e3a;
+    }
+    section {
+      background: white;
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 16px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    h2 {
+      margin-top: 0;
+      font-size: 1.1rem;
+      color: #333;
+      border-bottom: 1px solid #eee;
+      padding-bottom: 8px;
+    }
+    label {
+      display: block;
+      margin-bottom: 4px;
+      font-size: 0.9rem;
+      color: #666;
+    }
+    input, select, textarea {
+      width: 100%;
+      padding: 8px;
+      margin-bottom: 12px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-size: 1rem;
+    }
+    input:disabled, select:disabled, textarea:disabled {
+      background: #f0f0f0;
+    }
+    button {
+      background: #c41e3a;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 1rem;
+      width: 100%;
+    }
+    button:hover:not(:disabled) {
+      background: #a01830;
+    }
+    button:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+    .slots {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin: 8px 0;
+    }
+    .slot {
+      width: 28px;
+      height: 28px;
+      border-radius: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.8rem;
+      font-weight: bold;
+    }
+    .slot.available {
+      background: #e8f5e9;
+      color: #2e7d32;
+      cursor: pointer;
+    }
+    .slot.available:hover {
+      background: #c8e6c9;
+      transform: scale(1.1);
+    }
+    .slot.claimed {
+      background: #fff3e0;
+      color: #e65100;
+    }
+    .slot.complete {
+      background: #e8f5e9;
+      color: #2e7d32;
+    }
+    .slot.selected {
+      background: #4caf50;
+      color: white;
+      transform: scale(1.15);
+    }
+    .status-row {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+    .phase-badge {
+      background: #e3f2fd;
+      color: #1565c0;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-weight: bold;
+    }
+    #log {
+      height: 150px;
+      overflow-y: auto;
+      font-family: monospace;
+      font-size: 0.85rem;
+      background: #fafafa;
+      padding: 8px;
+      border-radius: 4px;
+    }
+    .log-entry {
+      margin-bottom: 4px;
+    }
+    .log-entry.error {
+      color: #c62828;
+    }
+    .log-entry .time {
+      color: #888;
+    }
+    #action-section {
+      display: none;
+    }
+    #status-section {
+      display: none;
+    }
+    .delivery-result {
+      background: #e8f5e9;
+      padding: 12px;
+      border-radius: 4px;
+      margin-top: 12px;
+      font-weight: bold;
+      text-align: center;
+    }
+    .hidden {
+      display: none !important;
+    }
+  </style>
+</head>
+<body>
+  <h1>ZK Secret Santa</h1>
+
+  <!-- Setup Section -->
+  <section id="setup-section">
+    <h2 id="setup-header" style="cursor: pointer">Setup <span id="setup-toggle">▼</span></h2>
+    <div id="setup-content">
+      <input type="hidden" id="pxe-url" value="https://next.devnet.aztec-labs.com/">
+
+      <label for="contract-address">Contract Address</label>
+      <input type="text" id="contract-address" value="0x14723bfc3c33d7ab7f60040f496aa86af0b941370c46bed0858ea616d873636d">
+
+      <label for="game-id">Game ID (leave empty for latest)</label>
+      <input type="number" id="game-id" value="" min="1" placeholder="Auto-detect">
+
+      <label for="passphrase">Your Passphrase</label>
+      <input type="password" id="passphrase" placeholder="Your secret passphrase">
+
+      <button id="connect-btn">Connect</button>
+    </div>
+  </section>
+
+  <!-- Status Section -->
+  <section id="status-section">
+    <h2>Game Status</h2>
+    <div class="status-row">
+      <span>Phase:</span>
+      <span class="phase-badge" id="phase-name">Loading...</span>
+    </div>
+    <div class="status-row">
+      <span>Participants:</span>
+      <span id="participants">-</span>
+    </div>
+    <div>
+      <label>Slots (claimed / available):</label>
+      <div class="slots" id="slots-grid"></div>
+    </div>
+  </section>
+
+  <!-- Action Section -->
+  <section id="action-section">
+    <h2>Your Action</h2>
+    <div id="action-content">
+      <!-- Dynamic content based on phase -->
+    </div>
+  </section>
+
+  <!-- Log Section -->
+  <section>
+    <h2>Activity Log</h2>
+    <div id="log"></div>
+  </section>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

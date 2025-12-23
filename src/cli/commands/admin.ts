@@ -14,15 +14,10 @@ import { TestWallet } from "@aztec/test-wallet/server";
 import {
   connectToContract,
   getGameInfo,
-  getClaimedSlots,
-  getReceiverClaimedSlots,
+  getGameState,
   PHASE,
   PHASE_NAMES,
 } from "../services/contract.js";
-import {
-  getClaimedSlotsFromEvents,
-  getReceiverClaimedSlotsFromEvents,
-} from "../services/events.js";
 import { getSponsoredPaymentMethod } from "../services/wallet.js";
 import {
   loadConfig,
@@ -145,7 +140,7 @@ export async function viewStatus(
   wallet: TestWallet,
   callerAddress: AztecAddress,
   node: AztecNode,
-  options: { game?: number; events?: boolean }
+  options: { game?: number }
 ): Promise<void> {
   const contractAddress = getContractAddress();
   const contract = await connectToContract(
@@ -162,69 +157,18 @@ export async function viewStatus(
     return;
   }
 
-  // Get game info
-  const { phase, phaseName, participantCount, maxParticipants } = await getGameInfo(
-    contract,
-    BigInt(gameId),
-    callerAddress
-  );
+  // Get full game state in single RPC call
+  const state = await getGameState(contract, BigInt(gameId), callerAddress);
 
-  display.gameStatus(gameId, phase, participantCount, maxParticipants);
+  display.gameStatus(gameId, state.phase, state.participantCount, state.maxParticipants);
 
   // If in sender registration or later, show slots
-  if (phase >= PHASE.SENDER_REGISTRATION) {
+  if (state.phase >= PHASE.SENDER_REGISTRATION) {
     display.header("Slot Status");
 
-    let claimedSlots: number[];
-    let receiverClaimedSlots: number[] = [];
-
-    if (options.events) {
-      // Use events for faster slot discovery
-      display.step("Fetching slot status from events...");
-      const blockNumber = await node.getBlockNumber();
-
-      try {
-        claimedSlots = await getClaimedSlotsFromEvents(
-          node,
-          BigInt(gameId),
-          0,
-          blockNumber
-        );
-
-        if (phase >= PHASE.RECEIVER_CLAIM) {
-          receiverClaimedSlots = await getReceiverClaimedSlotsFromEvents(
-            node,
-            BigInt(gameId),
-            0,
-            blockNumber
-          );
-        }
-      } catch (err) {
-        display.warn("Event fetch failed, falling back to view functions...");
-        claimedSlots = await getClaimedSlots(
-          contract,
-          BigInt(gameId),
-          maxParticipants,
-          callerAddress
-        );
-      }
-    } else {
-      // Batch queries - single RPC call each
-      display.step("Fetching slot status...");
-      const queries: [Promise<number[]>, Promise<number[]>?] = [
-        getClaimedSlots(contract, BigInt(gameId), maxParticipants, callerAddress),
-      ];
-      if (phase >= PHASE.RECEIVER_CLAIM) {
-        queries.push(getReceiverClaimedSlots(contract, BigInt(gameId), maxParticipants, callerAddress));
-      }
-      const results = await Promise.all(queries);
-      claimedSlots = results[0];
-      receiverClaimedSlots = results[1] ?? [];
-    }
-
-    for (let slot = 1; slot <= maxParticipants; slot++) {
-      const isClaimed = claimedSlots.includes(slot);
-      const hasReceiver = receiverClaimedSlots.includes(slot);
+    for (let slot = 1; slot <= state.maxParticipants; slot++) {
+      const isClaimed = state.senderSlots.includes(slot);
+      const hasReceiver = state.receiverSlots.includes(slot);
       display.slotStatusExtended(slot, isClaimed, hasReceiver);
     }
     display.divider();
@@ -232,7 +176,7 @@ export async function viewStatus(
 
   // Show next actions based on phase
   display.header("Next Actions");
-  switch (phase) {
+  switch (state.phase) {
     case PHASE.ENROLLMENT:
       display.info(`Players can enroll with: yarn cli enroll --game ${gameId}`);
       display.info(`Admin can advance phase with: yarn cli admin advance --game ${gameId}`);
@@ -295,7 +239,6 @@ export function registerAdminCommands(
     .command("status")
     .description("View game status (alias for global status)")
     .option("--game <id>", "Game ID", parseInt)
-    .option("--events", "Use events for faster slot discovery")
     .action(async (options) => {
       try {
         const { wallet, accountAddress, node } = await getWallet();

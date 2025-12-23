@@ -9,7 +9,7 @@ import { AztecAddress } from "@aztec/aztec.js/addresses";
 import type { AztecNode } from "@aztec/aztec.js/node";
 import { TestWallet } from "@aztec/test-wallet/server";
 
-import { connectToContract, getGameInfo, getClaimedSlots, getReceiverClaimedSlots, PHASE, PHASE_NAMES } from "../services/contract.js";
+import { connectToContract, getGameInfo, getGameState, PHASE, PHASE_NAMES } from "../services/contract.js";
 import { getSlotClaimedEvents, getReceiverClaimedEvents } from "../services/events.js";
 import { loadConfig, getContractAddress } from "../services/config.js";
 import * as display from "../utils/display.js";
@@ -48,19 +48,15 @@ export async function watchGame(
     return;
   }
 
-  // Get initial game info
-  const { phase, phaseName, participantCount, maxParticipants } = await getGameInfo(
-    contract,
-    BigInt(gameId),
-    callerAddress
-  );
-
   const pollInterval = options.interval ?? DEFAULT_POLL_INTERVAL_MS;
   const isLive = options.live ?? false;
 
   if (isLive) {
-    await watchGameLive(contract, callerAddress, node, gameId, phase, participantCount, maxParticipants, pollInterval);
+    // Live mode fetches state itself via getGameState
+    await watchGameLive(contract, callerAddress, gameId, pollInterval);
   } else {
+    // Event mode needs initial phase for filtering
+    const { phase } = await getGameInfo(contract, BigInt(gameId), callerAddress);
     await watchGameEvents(contract, callerAddress, node, gameId, phase, pollInterval);
   }
 }
@@ -71,11 +67,7 @@ export async function watchGame(
 async function watchGameLive(
   contract: any,
   callerAddress: AztecAddress,
-  node: AztecNode,
   gameId: number,
-  initialPhase: number,
-  participantCount: number,
-  maxParticipants: number,
   pollInterval: number
 ): Promise<void> {
   display.hideCursor();
@@ -84,39 +76,24 @@ async function watchGameLive(
   console.log(display.timestamp() + " Starting live display...");
   console.log("");
 
-  let currentPhase = initialPhase;
-  let currentParticipants = participantCount;
-
-  // Initial fetch
-  const [senderSlots, receiverSlots] = await Promise.all([
-    getClaimedSlots(contract, BigInt(gameId), maxParticipants, callerAddress),
-    getReceiverClaimedSlots(contract, BigInt(gameId), maxParticipants, callerAddress),
-  ]);
+  // Initial fetch - single RPC call
+  let state = await getGameState(contract, BigInt(gameId), callerAddress);
 
   // Render initial state
   const lines = display.renderLiveDashboard(
-    gameId, currentPhase, currentParticipants, maxParticipants,
-    senderSlots, receiverSlots, new Date()
+    gameId, state.phase, state.participantCount, state.maxParticipants,
+    state.senderSlots, state.receiverSlots, new Date()
   );
   display.writeLive(lines);
 
-  // Poll and update
+  // Poll and update - single RPC call per poll
   const intervalId = setInterval(async () => {
     try {
-      // Fetch all data in parallel
-      const [gameInfo, newSenderSlots, newReceiverSlots] = await Promise.all([
-        getGameInfo(contract, BigInt(gameId), callerAddress),
-        getClaimedSlots(contract, BigInt(gameId), maxParticipants, callerAddress),
-        getReceiverClaimedSlots(contract, BigInt(gameId), maxParticipants, callerAddress),
-      ]);
+      state = await getGameState(contract, BigInt(gameId), callerAddress);
 
-      currentPhase = gameInfo.phase;
-      currentParticipants = gameInfo.participantCount;
-
-      // Update display
       const newLines = display.renderLiveDashboard(
-        gameId, currentPhase, currentParticipants, maxParticipants,
-        newSenderSlots, newReceiverSlots, new Date()
+        gameId, state.phase, state.participantCount, state.maxParticipants,
+        state.senderSlots, state.receiverSlots, new Date()
       );
       display.writeLive(newLines);
     } catch (err: any) {
