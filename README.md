@@ -6,8 +6,23 @@ Privacy-preserving Secret Santa on Aztec. Nobody knows who sends to whom.
 
 1. **JOIN** - Players enroll in the game
 2. **CLAIM** - Players pick a sender slot (register)
-3. **MATCH** - Players pick a receiver slot (claim someone else's slot)
+3. **MATCH** - Players claim as receiver (slot auto-assigned via cyclic permutation)
 4. **REVEAL** - Game complete, senders can view their recipient's delivery address
+
+## Cyclic Slot Assignment
+
+To guarantee everyone gets matched (no deadlocks), the MATCH phase uses cyclic permutation:
+
+```
+Your receiver slot = (your_sender_slot % participant_count) + 1
+```
+
+Example with 3 players:
+- Alice (slot 1) -> receives from slot 2 (Bob)
+- Bob (slot 2) -> receives from slot 3 (Carol)
+- Carol (slot 3) -> receives from slot 1 (Alice)
+
+This forms a cycle: Alice sends to Carol, Carol sends to Bob, Bob sends to Alice.
 
 ## Install
 
@@ -41,7 +56,7 @@ The CLI polls and guides you through all phases automatically.
 ```bash
 yarn cli --next-devnet -p $ZK_PASSPHRASE enroll --game $GAME        # Join a game
 yarn cli --next-devnet -p $ZK_PASSPHRASE register --slot <N>        # Pick a sender slot
-yarn cli --next-devnet -p $ZK_PASSPHRASE claim --slot <N>           # Pick a receiver slot (different from yours)
+yarn cli --next-devnet -p $ZK_PASSPHRASE claim --sender-slot <N>    # Claim as receiver (auto-assigned)
 yarn cli --next-devnet -p $ZK_PASSPHRASE delivery --slot <N>        # View your recipient's address
 ```
 
