@@ -3,3 +3,5 @@ members = [
 "src/secret_santa_contract",
 ]
 
+[benchmark]
+secret_santa = "benchmarks/secret_santa.benchmark.ts"

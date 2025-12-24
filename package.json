@@ -15,6 +15,7 @@
     "test:js": "vitest run",
     "test:noir": "aztec test",
     "ccc": "yarn clean && yarn compile && yarn codegen",
+    "bench": "NODE_NO_WARNINGS=1 aztec-benchmark --suffix _base",
     "cli": "tsx src/cli/index.ts",
     "bundle-cli": "yarn ccc && mkdir -p cli/src/artifacts cli/src/target && cp artifacts/SecretSanta.ts cli/src/artifacts/ && cp target/secret_santa_contract-SecretSanta.json cli/src/target/ && cd cli && yarn install && yarn build"
   },
@@ -32,6 +33,7 @@
     "commander": "^13.1.0"
   },
   "devDependencies": {
+    "@defi-wonderland/aztec-benchmark": "3.0.0-devnet.2",
     "@types/jest": "29.5.11",
     "tsx": "4.20.4",
     "typescript": "5.9.2",
