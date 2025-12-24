@@ -155,8 +155,8 @@ sender_registration_counts: {
     /** advance_phase(game_id: field) */
     advance_phase: ((game_id: FieldLike) => ContractFunctionInteraction) & Pick<ContractMethod, 'selector'>;
 
-    /** claim_as_receiver(game_id: field, target_slot: integer, encrypted_delivery_data: array) */
-    claim_as_receiver: ((game_id: FieldLike, target_slot: (bigint | number), encrypted_delivery_data: FieldLike[]) => ContractFunctionInteraction) & Pick<ContractMethod, 'selector'>;
+    /** claim_receiver(game_id: field, participant_count: integer, encrypted_delivery_data: array) */
+    claim_receiver: ((game_id: FieldLike, participant_count: (bigint | number), encrypted_delivery_data: FieldLike[]) => ContractFunctionInteraction) & Pick<ContractMethod, 'selector'>;
 
     /** constructor(admin: struct) */
     constructor: ((admin: AztecAddressLike) => ContractFunctionInteraction) & Pick<ContractMethod, 'selector'>;

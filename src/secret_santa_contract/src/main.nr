@@ -270,41 +270,51 @@ pub contract SecretSanta {
         self.enqueue_self._try_claim_slot(game_id, chosen_slot, encryption_key);
     }
 
+    /// Claim receiver slot using cyclic permutation.
+    /// Your receiver slot is automatically assigned: (your_sender_slot % participant_count) + 1
+    /// This guarantees a valid derangement (no one receives from themselves).
     #[external("private")]
-    fn claim_as_receiver(
+    fn claim_receiver(
         game_id: Field,
-        target_slot: u32,
+        participant_count: u32,
         encrypted_delivery_data: [Field; 8],
     ) {
         let caller = self.msg_sender().unwrap();
 
-        // Verify enrollment by filtering for notes matching this game_id
-        let options = NoteGetterOptions::new()
+        // 1. Verify enrollment
+        let participant_options = NoteGetterOptions::new()
             .select(ParticipantNote::properties().game_id, Comparator.EQ, game_id)
             .set_limit(1);
-        let participant_notes = self.storage.participants.at(caller).get_notes(options);
+        let participant_notes =
+            self.storage.participants.at(caller).get_notes(participant_options);
         assert(participant_notes.len() > 0, "Not enrolled in this game");
 
-        // SECURITY CHECK: Prevent self-selection via nullifier collision
-        // If caller IS the sender of target_slot, they already pushed this nullifier
-        // during register_as_sender. Pushing it again causes a collision and TX reverts.
-        // If caller is NOT the sender, this is a different nullifier (different address)
-        // so no collision occurs.
-        let self_selection_check = compute_sender_nullifier(caller, game_id, target_slot as Field);
-        self.context.push_nullifier(self_selection_check);
+        // 2. Get caller's sender slot from their SenderNote
+        let sender_options = NoteGetterOptions::new()
+            .select(SenderNote::properties().game_id, Comparator.EQ, game_id)
+            .set_limit(1);
+        let sender_notes = self.storage.sender_assignments.at(caller).get_notes(sender_options);
+        assert(sender_notes.len() > 0, "Not registered as sender");
+        let sender_slot = sender_notes.get(0).note.get_slot() as u32;
 
+        // 3. Calculate receiver slot using cyclic permutation
+        // If you're slot N, you receive from slot (N % count) + 1
+        // This forms a single cycle: 1->2->3->...->N->1
+        let receiver_slot = (sender_slot % participant_count) + 1;
+        let target_slot = receiver_slot;
+
+        // 4. Push receiver nullifier to prevent double claiming
+        // (Self-selection is now impossible by construction)
         let receiver_nullifier = compute_receiver_nullifier(caller, game_id);
         self.context.push_nullifier(receiver_nullifier);
 
-        let receiver_note = ReceiverNote::new(caller, game_id, target_slot as Field);
+        // 5. Create receiver note and store delivery data
+        let receiver_note = ReceiverNote::new(caller, game_id, receiver_slot as Field);
         self.storage.receiver_claims.at(caller).insert(receiver_note).deliver(
             MessageDelivery.CONSTRAINED_ONCHAIN,
         );
 
         self.enqueue_self._mark_receiver_claim(game_id, target_slot);
-
-        // Store encrypted delivery data for the sender
-        // Receiver encrypts off-chain using slot's public key, only sender can decrypt
         self.enqueue_self._store_delivery_data(game_id, target_slot, encrypted_delivery_data);
     }
 

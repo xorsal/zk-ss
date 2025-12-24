@@ -29,18 +29,23 @@ fn derive_encryption_keypair_from_account(account: AztecAddress) -> Point {
     fixed_base_scalar_mul(private_key)
 }
 
-/// Full Secret Santa game flow test
+/// Full Secret Santa game flow test with cyclic permutation
 ///
 /// This test covers:
 /// 1. Deploy contract
 /// 2. Create a game
 /// 3. Enroll 3 participants
-/// 4. Advance to sender registration
+/// 4. Advance to sender registration (CLAIM phase)
 /// 5. Each participant registers with a unique slot + encryption key
-/// 6. Advance to receiver claim
-/// 7. Each participant claims a different slot (proving NOT self-assignment)
-/// 8. Advance to completed
+/// 6. Advance to receiver claim (MATCH phase)
+/// 7. Each participant claims (auto-assigned via cyclic permutation)
+/// 8. Advance to completed (REVEAL phase)
 /// 9. Verify delivery data can be retrieved
+///
+/// Cyclic assignment: receiver_slot = (sender_slot % count) + 1
+/// - Alice (slot 1) -> claims slot 2 -> receives from Bob
+/// - Bob (slot 2) -> claims slot 3 -> receives from Carol
+/// - Carol (slot 3) -> claims slot 1 -> receives from Alice
 #[test]
 unconstrained fn test_full_secret_santa_game() {
     // ============================================================
@@ -158,51 +163,52 @@ unconstrained fn test_full_secret_santa_game() {
     assert(phase == PHASE_MATCH as u8, "Should be in MATCH phase");
 
     // ============================================================
-    // STEP 7: Each participant claims a different slot (not their own)
+    // STEP 7: Each participant claims (cyclic assignment)
     //
-    // Assignment:
-    // - Alice (owns slot 1) claims slot 2 (Bob's) -> Alice receives from Bob
-    // - Bob (owns slot 2) claims slot 3 (Carol's) -> Bob receives from Carol
-    // - Carol (owns slot 3) claims slot 1 (Alice's) -> Carol receives from Alice
+    // Cyclic formula: receiver_slot = (sender_slot % count) + 1
+    // - Alice (slot 1) -> (1 % 3) + 1 = 2 -> claims slot 2 -> receives from Bob
+    // - Bob (slot 2) -> (2 % 3) + 1 = 3 -> claims slot 3 -> receives from Carol
+    // - Carol (slot 3) -> (3 % 3) + 1 = 1 -> claims slot 1 -> receives from Alice
     //
-    // The contract verifies each caller is NOT the sender of the slot they're
-    // claiming using constrained public verification (Issue 1 fix).
+    // Self-selection is impossible by construction (no nullifier trick needed).
     // ============================================================
 
-    // Alice claims slot 2 with encrypted delivery data (8 fields for longer payloads)
+    let participant_count: u32 = 3;
+
+    // Alice claims with encrypted delivery data (auto-assigned to slot 2)
     let alice_delivery_data: [Field; 8] = [0x1111, 0x2222, 0x3333, 0x4444, 0, 0, 0, 0];
     env.call_private(
         alice,
-        SecretSanta::at(contract_address).claim_as_receiver(
+        SecretSanta::at(contract_address).claim_receiver(
             game_id,
-            2, // target slot
+            participant_count,
             alice_delivery_data,
         ),
     );
 
-    // Bob claims slot 3 with encrypted delivery data
+    // Bob claims with encrypted delivery data (auto-assigned to slot 3)
     let bob_delivery_data: [Field; 8] = [0x5555, 0x6666, 0x7777, 0x8888, 0, 0, 0, 0];
     env.call_private(
         bob,
-        SecretSanta::at(contract_address).claim_as_receiver(
+        SecretSanta::at(contract_address).claim_receiver(
             game_id,
-            3, // target slot
+            participant_count,
             bob_delivery_data,
         ),
     );
 
-    // Carol claims slot 1 with encrypted delivery data
+    // Carol claims with encrypted delivery data (auto-assigned to slot 1)
     let carol_delivery_data: [Field; 8] = [0x9999, 0xaaaa, 0xbbbb, 0xcccc, 0, 0, 0, 0];
     env.call_private(
         carol,
-        SecretSanta::at(contract_address).claim_as_receiver(
+        SecretSanta::at(contract_address).claim_receiver(
             game_id,
-            1, // target slot
+            participant_count,
             carol_delivery_data,
         ),
     );
 
-    // Verify encrypted delivery data was stored
+    // Verify encrypted delivery data was stored at correct slots
     let stored_delivery1 =
         env.simulate_utility(SecretSanta::at(contract_address).get_slot_delivery_data(game_id, 1));
     let stored_delivery2 =
@@ -210,11 +216,11 @@ unconstrained fn test_full_secret_santa_game() {
     let stored_delivery3 =
         env.simulate_utility(SecretSanta::at(contract_address).get_slot_delivery_data(game_id, 3));
 
-    // Carol claimed slot 1, so slot 1 has Carol's delivery data
+    // Carol (slot 3) -> claims slot 1, so slot 1 has Carol's delivery data
     assert(stored_delivery1[0] == carol_delivery_data[0], "Slot 1 should have Carol's data");
-    // Alice claimed slot 2, so slot 2 has Alice's delivery data
+    // Alice (slot 1) -> claims slot 2, so slot 2 has Alice's delivery data
     assert(stored_delivery2[0] == alice_delivery_data[0], "Slot 2 should have Alice's data");
-    // Bob claimed slot 3, so slot 3 has Bob's delivery data
+    // Bob (slot 2) -> claims slot 3, so slot 3 has Bob's delivery data
     assert(stored_delivery3[0] == bob_delivery_data[0], "Slot 3 should have Bob's data");
 
     // ============================================================
@@ -241,11 +247,10 @@ unconstrained fn test_full_secret_santa_game() {
     // - Carol (slot 3) reads slot 3 delivery data -> decrypts Bob's address
 }
 
-/// Test that a participant cannot claim their own slot as receiver
-/// Self-selection is prevented via nullifier collision - if you try to claim
-/// your own slot, you push the same nullifier twice, causing a collision.
-#[test(should_fail)]
-unconstrained fn test_cannot_claim_own_slot() {
+/// Test cyclic assignment correctness
+/// Verifies that receiver_slot = (sender_slot % count) + 1 works correctly
+#[test]
+unconstrained fn test_cyclic_assignment_correctness() {
     let mut env = TestEnvironment::new();
 
     let alice = env.create_light_account();
@@ -269,6 +274,11 @@ unconstrained fn test_cannot_claim_own_slot() {
     // Advance to sender registration
     env.call_public(alice, SecretSanta::at(contract_address).advance_phase(game_id));
 
+    // Register in non-sequential order to verify cyclic logic
+    env.call_private(
+        carol,
+        SecretSanta::at(contract_address).register_as_sender(game_id, 3, carol_key),
+    );
     env.call_private(
         alice,
         SecretSanta::at(contract_address).register_as_sender(game_id, 1, alice_key),
@@ -277,27 +287,52 @@ unconstrained fn test_cannot_claim_own_slot() {
         bob,
         SecretSanta::at(contract_address).register_as_sender(game_id, 2, bob_key),
     );
-    env.call_private(
-        carol,
-        SecretSanta::at(contract_address).register_as_sender(game_id, 3, carol_key),
-    );
 
     // Advance to receiver claim
     env.call_public(alice, SecretSanta::at(contract_address).advance_phase(game_id));
 
-    // Alice tries to claim her own slot (slot 1) - THIS SHOULD FAIL
-    // Alice already pushed sender_nullifier = hash(Alice, game_id, 1) during registration.
-    // When she tries to claim slot 1, she pushes the same nullifier again causing collision
-    let delivery_data: [Field; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
+    // Each claims - cyclic assignment happens automatically
+    // Alice (slot 1) -> slot 2, Bob (slot 2) -> slot 3, Carol (slot 3) -> slot 1
+    let participant_count: u32 = 3;
+    let alice_data: [Field; 8] = [0xA1, 0, 0, 0, 0, 0, 0, 0];
+    let bob_data: [Field; 8] = [0xB0, 0, 0, 0, 0, 0, 0, 0];
+    let carol_data: [Field; 8] = [0xCA, 0, 0, 0, 0, 0, 0, 0];
 
     env.call_private(
         alice,
-        SecretSanta::at(contract_address).claim_as_receiver(
-            game_id,
-            1, // Alice trying to claim slot 1 (her own slot!)
-            delivery_data,
-        ),
+        SecretSanta::at(contract_address).claim_receiver(game_id, participant_count, alice_data),
     );
+    env.call_private(
+        bob,
+        SecretSanta::at(contract_address).claim_receiver(game_id, participant_count, bob_data),
+    );
+    env.call_private(
+        carol,
+        SecretSanta::at(contract_address).claim_receiver(game_id, participant_count, carol_data),
+    );
+
+    // Verify correct assignment:
+    // - Slot 1 has Carol's data (Carol claimed slot 1)
+    // - Slot 2 has Alice's data (Alice claimed slot 2)
+    // - Slot 3 has Bob's data (Bob claimed slot 3)
+    let slot1_data =
+        env.simulate_utility(SecretSanta::at(contract_address).get_slot_delivery_data(game_id, 1));
+    let slot2_data =
+        env.simulate_utility(SecretSanta::at(contract_address).get_slot_delivery_data(game_id, 2));
+    let slot3_data =
+        env.simulate_utility(SecretSanta::at(contract_address).get_slot_delivery_data(game_id, 3));
+
+    assert(slot1_data[0] == carol_data[0], "Slot 1 should have Carol's data (0xCA)");
+    assert(slot2_data[0] == alice_data[0], "Slot 2 should have Alice's data (0xA1)");
+    assert(slot3_data[0] == bob_data[0], "Slot 3 should have Bob's data (0xB0)");
+
+    // Verify all slots are receiver-claimed
+    let all_claimed = env.simulate_utility(
+        SecretSanta::at(contract_address).get_all_receiver_claimed_slots(game_id, 3),
+    );
+    assert(all_claimed[0], "Slot 1 receiver should be claimed");
+    assert(all_claimed[1], "Slot 2 receiver should be claimed");
+    assert(all_claimed[2], "Slot 3 receiver should be claimed");
 }
 
 /// Test that duplicate enrollment is prevented
@@ -443,19 +478,20 @@ unconstrained fn test_batch_query_claimed_slots() {
     assert(!receiver_slots_before[1], "Receiver slot 2 should not be claimed yet");
     assert(!receiver_slots_before[2], "Receiver slot 3 should not be claimed yet");
 
-    // Each claims a different slot (not their own)
+    // Each claims (cyclic assignment: slot 1->2, slot 2->3, slot 3->1)
+    let participant_count: u32 = 3;
     let delivery_data: [Field; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
     env.call_private(
         alice,
-        SecretSanta::at(contract_address).claim_as_receiver(game_id, 2, delivery_data),
+        SecretSanta::at(contract_address).claim_receiver(game_id, participant_count, delivery_data),
     );
     env.call_private(
         bob,
-        SecretSanta::at(contract_address).claim_as_receiver(game_id, 3, delivery_data),
+        SecretSanta::at(contract_address).claim_receiver(game_id, participant_count, delivery_data),
     );
     env.call_private(
         carol,
-        SecretSanta::at(contract_address).claim_as_receiver(game_id, 1, delivery_data),
+        SecretSanta::at(contract_address).claim_receiver(game_id, participant_count, delivery_data),
     );
 
     // All receiver slots should now be claimed

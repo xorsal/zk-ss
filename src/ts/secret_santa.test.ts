@@ -179,7 +179,11 @@ describe("Secret Santa Contract E2E", () => {
     const bobAddress = "Bob's delivery address: 456 Elf Lane, Workshop City";
     const carlAddress = "Carl's delivery address: 789 Reindeer Road, Snow Village";
 
-    // Alice claims slot 2 (Bob's slot) - encrypts her address with Bob's public key
+    // Cyclic assignment: slot N -> claims slot (N % 3) + 1
+    // Alice (slot 1) -> slot 2, Bob (slot 2) -> slot 3, Carl (slot 3) -> slot 1
+    const numParticipants = 3;
+
+    // Alice (slot 1) auto-assigned to slot 2 - encrypts her address with Bob's public key
     // Bob will be able to decrypt and see Alice's address
     console.log("  Alice encrypting her address for Bob (slot 2 owner)...");
     const aliceEncryptedData = await encryptDeliveryData(aliceAddress, {
@@ -187,10 +191,10 @@ describe("Secret Santa Contract E2E", () => {
       y: bobEncryptionKey.y.toBigInt(),
       is_infinite: bobEncryptionKey.is_infinite,
     });
-    await contract.withWallet(wallet).methods.claim_as_receiver(gameId, 2, aliceEncryptedData).send({ from: alice }).wait();
-    console.log("  Alice claimed slot 2 successfully");
+    await contract.withWallet(wallet).methods.claim_receiver(gameId, numParticipants, aliceEncryptedData).send({ from: alice }).wait();
+    console.log("  Alice claimed (auto-assigned to slot 2) successfully");
 
-    // Bob claims slot 3 (Carl's slot) - encrypts his address with Carl's public key
+    // Bob (slot 2) auto-assigned to slot 3 - encrypts his address with Carl's public key
     // Carl will be able to decrypt and see Bob's address
     console.log("  Bob encrypting his address for Carl (slot 3 owner)...");
     const bobEncryptedData = await encryptDeliveryData(bobAddress, {
@@ -198,10 +202,10 @@ describe("Secret Santa Contract E2E", () => {
       y: carlEncryptionKey.y.toBigInt(),
       is_infinite: carlEncryptionKey.is_infinite,
     });
-    await contract.withWallet(wallet).methods.claim_as_receiver(gameId, 3, bobEncryptedData).send({ from: bob }).wait();
-    console.log("  Bob claimed slot 3 successfully");
+    await contract.withWallet(wallet).methods.claim_receiver(gameId, numParticipants, bobEncryptedData).send({ from: bob }).wait();
+    console.log("  Bob claimed (auto-assigned to slot 3) successfully");
 
-    // Carl claims slot 1 (Alice's slot) - encrypts his address with Alice's public key
+    // Carl (slot 3) auto-assigned to slot 1 - encrypts his address with Alice's public key
     // Alice will be able to decrypt and see Carl's address
     console.log("  Carl encrypting his address for Alice (slot 1 owner)...");
     const carlEncryptedData = await encryptDeliveryData(carlAddress, {
@@ -209,8 +213,8 @@ describe("Secret Santa Contract E2E", () => {
       y: aliceEncryptionKey.y.toBigInt(),
       is_infinite: aliceEncryptionKey.is_infinite,
     });
-    await contract.withWallet(wallet).methods.claim_as_receiver(gameId, 1, carlEncryptedData).send({ from: carl }).wait();
-    console.log("  Carl claimed slot 1 successfully");
+    await contract.withWallet(wallet).methods.claim_receiver(gameId, numParticipants, carlEncryptedData).send({ from: carl }).wait();
+    console.log("  Carl claimed (auto-assigned to slot 1) successfully");
 
     // Verify encrypted delivery data was stored (first field is ephemeral pubkey X)
     const storedDelivery1 = await contract.methods.get_slot_delivery_data(gameId, 1n).simulate({ from: alice });
