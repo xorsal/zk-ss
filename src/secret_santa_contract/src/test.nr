@@ -42,10 +42,10 @@ fn derive_encryption_keypair_from_account(account: AztecAddress) -> Point {
 /// 8. Advance to completed (REVEAL phase)
 /// 9. Verify delivery data can be retrieved
 ///
-/// Cyclic assignment: receiver_slot = (sender_slot % count) + 1
-/// - Alice (slot 1) -> claims slot 2 -> receives from Bob
-/// - Bob (slot 2) -> claims slot 3 -> receives from Carol
-/// - Carol (slot 3) -> claims slot 1 -> receives from Alice
+/// Cyclic assignment: receiver_slot = ((sender_slot - 1 + 137) % count) + 1
+/// - Alice (slot 1) -> claims slot 3 -> receives from Carol
+/// - Bob (slot 2) -> claims slot 1 -> receives from Alice
+/// - Carol (slot 3) -> claims slot 2 -> receives from Bob
 #[test]
 unconstrained fn test_full_secret_santa_game() {
     // ============================================================
@@ -163,19 +163,19 @@ unconstrained fn test_full_secret_santa_game() {
     assert(phase == PHASE_MATCH as u8, "Should be in MATCH phase");
 
     // ============================================================
-    // STEP 7: Each participant claims (cyclic assignment)
+    // STEP 7: Each participant claims (cyclic assignment with prime offset)
     //
-    // Cyclic formula: receiver_slot = (sender_slot % count) + 1
-    // - Alice (slot 1) -> (1 % 3) + 1 = 2 -> claims slot 2 -> receives from Bob
-    // - Bob (slot 2) -> (2 % 3) + 1 = 3 -> claims slot 3 -> receives from Carol
-    // - Carol (slot 3) -> (3 % 3) + 1 = 1 -> claims slot 1 -> receives from Alice
+    // Cyclic formula: receiver_slot = ((sender_slot - 1 + 137) % count) + 1
+    // - Alice (slot 1) -> ((0 + 137) % 3) + 1 = 3 -> claims slot 3 -> receives from Carol
+    // - Bob (slot 2) -> ((1 + 137) % 3) + 1 = 1 -> claims slot 1 -> receives from Alice
+    // - Carol (slot 3) -> ((2 + 137) % 3) + 1 = 2 -> claims slot 2 -> receives from Bob
     //
     // Self-selection is impossible by construction (no nullifier trick needed).
     // ============================================================
 
     let participant_count: u32 = 3;
 
-    // Alice claims with encrypted delivery data (auto-assigned to slot 2)
+    // Alice claims with encrypted delivery data (auto-assigned to slot 3)
     let alice_delivery_data: [Field; 8] = [0x1111, 0x2222, 0x3333, 0x4444, 0, 0, 0, 0];
     env.call_private(
         alice,
@@ -186,7 +186,7 @@ unconstrained fn test_full_secret_santa_game() {
         ),
     );
 
-    // Bob claims with encrypted delivery data (auto-assigned to slot 3)
+    // Bob claims with encrypted delivery data (auto-assigned to slot 1)
     let bob_delivery_data: [Field; 8] = [0x5555, 0x6666, 0x7777, 0x8888, 0, 0, 0, 0];
     env.call_private(
         bob,
@@ -197,7 +197,7 @@ unconstrained fn test_full_secret_santa_game() {
         ),
     );
 
-    // Carol claims with encrypted delivery data (auto-assigned to slot 1)
+    // Carol claims with encrypted delivery data (auto-assigned to slot 2)
     let carol_delivery_data: [Field; 8] = [0x9999, 0xaaaa, 0xbbbb, 0xcccc, 0, 0, 0, 0];
     env.call_private(
         carol,
@@ -216,12 +216,12 @@ unconstrained fn test_full_secret_santa_game() {
     let stored_delivery3 =
         env.simulate_utility(SecretSanta::at(contract_address).get_slot_delivery_data(game_id, 3));
 
-    // Carol (slot 3) -> claims slot 1, so slot 1 has Carol's delivery data
-    assert(stored_delivery1[0] == carol_delivery_data[0], "Slot 1 should have Carol's data");
-    // Alice (slot 1) -> claims slot 2, so slot 2 has Alice's delivery data
-    assert(stored_delivery2[0] == alice_delivery_data[0], "Slot 2 should have Alice's data");
-    // Bob (slot 2) -> claims slot 3, so slot 3 has Bob's delivery data
-    assert(stored_delivery3[0] == bob_delivery_data[0], "Slot 3 should have Bob's data");
+    // Bob (slot 2) -> claims slot 1, so slot 1 has Bob's delivery data
+    assert(stored_delivery1[0] == bob_delivery_data[0], "Slot 1 should have Bob's data");
+    // Carol (slot 3) -> claims slot 2, so slot 2 has Carol's delivery data
+    assert(stored_delivery2[0] == carol_delivery_data[0], "Slot 2 should have Carol's data");
+    // Alice (slot 1) -> claims slot 3, so slot 3 has Alice's delivery data
+    assert(stored_delivery3[0] == alice_delivery_data[0], "Slot 3 should have Alice's data");
 
     // ============================================================
     // STEP 8: Advance to COMPLETED phase
@@ -248,7 +248,7 @@ unconstrained fn test_full_secret_santa_game() {
 }
 
 /// Test cyclic assignment correctness
-/// Verifies that receiver_slot = (sender_slot % count) + 1 works correctly
+/// Verifies that receiver_slot = ((sender_slot - 1 + 137) % count) + 1 works correctly
 #[test]
 unconstrained fn test_cyclic_assignment_correctness() {
     let mut env = TestEnvironment::new();
@@ -292,7 +292,7 @@ unconstrained fn test_cyclic_assignment_correctness() {
     env.call_public(alice, SecretSanta::at(contract_address).advance_phase(game_id));
 
     // Each claims - cyclic assignment happens automatically
-    // Alice (slot 1) -> slot 2, Bob (slot 2) -> slot 3, Carol (slot 3) -> slot 1
+    // Alice (slot 1) -> slot 3, Bob (slot 2) -> slot 1, Carol (slot 3) -> slot 2
     let participant_count: u32 = 3;
     let alice_data: [Field; 8] = [0xA1, 0, 0, 0, 0, 0, 0, 0];
     let bob_data: [Field; 8] = [0xB0, 0, 0, 0, 0, 0, 0, 0];
@@ -312,9 +312,10 @@ unconstrained fn test_cyclic_assignment_correctness() {
     );
 
     // Verify correct assignment:
-    // - Slot 1 has Carol's data (Carol claimed slot 1)
-    // - Slot 2 has Alice's data (Alice claimed slot 2)
-    // - Slot 3 has Bob's data (Bob claimed slot 3)
+    // With prime offset 137:
+    // - Slot 1 has Bob's data (Bob claimed slot 1)
+    // - Slot 2 has Carol's data (Carol claimed slot 2)
+    // - Slot 3 has Alice's data (Alice claimed slot 3)
     let slot1_data =
         env.simulate_utility(SecretSanta::at(contract_address).get_slot_delivery_data(game_id, 1));
     let slot2_data =
@@ -322,9 +323,9 @@ unconstrained fn test_cyclic_assignment_correctness() {
     let slot3_data =
         env.simulate_utility(SecretSanta::at(contract_address).get_slot_delivery_data(game_id, 3));
 
-    assert(slot1_data[0] == carol_data[0], "Slot 1 should have Carol's data (0xCA)");
-    assert(slot2_data[0] == alice_data[0], "Slot 2 should have Alice's data (0xA1)");
-    assert(slot3_data[0] == bob_data[0], "Slot 3 should have Bob's data (0xB0)");
+    assert(slot1_data[0] == bob_data[0], "Slot 1 should have Bob's data (0xB0)");
+    assert(slot2_data[0] == carol_data[0], "Slot 2 should have Carol's data (0xCA)");
+    assert(slot3_data[0] == alice_data[0], "Slot 3 should have Alice's data (0xA1)");
 
     // Verify all slots are receiver-claimed
     let all_claimed = env.simulate_utility(
@@ -478,7 +479,7 @@ unconstrained fn test_batch_query_claimed_slots() {
     assert(!receiver_slots_before[1], "Receiver slot 2 should not be claimed yet");
     assert(!receiver_slots_before[2], "Receiver slot 3 should not be claimed yet");
 
-    // Each claims (cyclic assignment: slot 1->2, slot 2->3, slot 3->1)
+    // Each claims (cyclic assignment: slot 1->3, slot 2->1, slot 3->2)
     let participant_count: u32 = 3;
     let delivery_data: [Field; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
     env.call_private(

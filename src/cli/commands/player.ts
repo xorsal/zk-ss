@@ -252,9 +252,10 @@ export async function claimAsReceiver(
     senderSlot = await prompts.promptSlot("Enter YOUR sender slot number:");
   }
 
-  // Calculate receiver slot using cyclic permutation: (sender_slot % count) + 1
+  // Calculate receiver slot using cyclic permutation with prime offset
+  // Formula: ((slot - 1 + 137) % count) + 1
   const participantCount = state.participantCount;
-  const targetSlot = (senderSlot % participantCount) + 1;
+  const targetSlot = ((senderSlot - 1 + 137) % participantCount) + 1;
 
   display.info(`Your sender slot: ${senderSlot}`);
   display.info(`Assigned receiver slot (cyclic): ${targetSlot}`);
@@ -598,9 +599,10 @@ async function claimAsReceiverInternal(
   // Get game state for participant count
   const state = await getGameState(contract, BigInt(gameId), callerAddress);
 
-  // Calculate receiver slot using cyclic permutation: (sender_slot % count) + 1
+  // Calculate receiver slot using cyclic permutation with prime offset
+  // Formula: ((slot - 1 + 137) % count) + 1
   const participantCount = state.participantCount;
-  const targetSlot = (senderSlot % participantCount) + 1;
+  const targetSlot = ((senderSlot - 1 + 137) % participantCount) + 1;
 
   display.info(`Your sender slot: ${senderSlot}`);
   display.info(`Assigned receiver slot (cyclic): ${targetSlot}`);

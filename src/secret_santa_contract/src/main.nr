@@ -297,10 +297,10 @@ pub contract SecretSanta {
         assert(sender_notes.len() > 0, "Not registered as sender");
         let sender_slot = sender_notes.get(0).note.get_slot() as u32;
 
-        // 3. Calculate receiver slot using cyclic permutation
-        // If you're slot N, you receive from slot (N % count) + 1
-        // This forms a single cycle: 1->2->3->...->N->1
-        let receiver_slot = (sender_slot % participant_count) + 1;
+        // 3. Calculate receiver slot using cyclic permutation with prime offset
+        // Using prime 137 to fuzz the distribution while maintaining derangement
+        // Formula: ((slot - 1 + 137) % count) + 1
+        let receiver_slot = ((sender_slot - 1 + 137) % participant_count) + 1;
         let target_slot = receiver_slot;
 
         // 4. Push receiver nullifier to prevent double claiming
