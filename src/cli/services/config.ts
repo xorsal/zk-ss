@@ -159,3 +159,20 @@ export function getCurrentGameId(): number | undefined {
   const config = loadConfig();
   return config.currentGameId;
 }
+
+/**
+ * Get the effective game ID from CLI option, GAME env var, or config.
+ * Priority: CLI option > GAME env var > config.currentGameId
+ */
+export function getEffectiveGameId(cliOption?: number): number | undefined {
+  if (cliOption !== undefined) {
+    return cliOption;
+  }
+  if (process.env.GAME) {
+    const envGameId = parseInt(process.env.GAME, 10);
+    if (!isNaN(envGameId)) {
+      return envGameId;
+    }
+  }
+  return getCurrentGameId();
+}

@@ -11,7 +11,7 @@ import { TestWallet } from "@aztec/test-wallet/server";
 
 import { connectToContract, getGameInfo, getGameState, PHASE, PHASE_NAMES } from "../services/contract.js";
 import { getSlotClaimedEvents, getReceiverClaimedEvents } from "../services/events.js";
-import { loadConfig, getContractAddress } from "../services/config.js";
+import { getContractAddress, getEffectiveGameId } from "../services/config.js";
 import * as display from "../utils/display.js";
 
 const DEFAULT_POLL_INTERVAL_MS = 5000; // 5 seconds
@@ -40,11 +40,10 @@ export async function watchGame(
   const contractAddress = AztecAddress.fromString(contractAddressStr);
   const contract = await connectToContract(wallet, contractAddress, node);
 
-  const config = loadConfig();
-  const gameId = options.game ?? config.currentGameId;
+  const gameId = getEffectiveGameId(options.game);
 
   if (!gameId) {
-    display.error("No game ID specified. Use --game <id> or set current game.");
+    display.error("No game ID specified. Use --game <id> or set GAME env var.");
     return;
   }
 

@@ -23,9 +23,9 @@ import {
 } from "../services/contract.js";
 import { getSponsoredPaymentMethod } from "../services/wallet.js";
 import {
-  loadConfig,
   updateConfig,
   getContractAddress,
+  getEffectiveGameId,
 } from "../services/config.js";
 import * as display from "../utils/display.js";
 import * as prompts from "../utils/prompts.js";
@@ -101,11 +101,10 @@ export async function advancePhase(
     node
   );
 
-  const config = loadConfig();
-  const gameId = options.game ?? config.currentGameId;
+  const gameId = getEffectiveGameId(options.game);
 
   if (!gameId) {
-    display.error("No game ID specified. Use --game <id> or set current game.");
+    display.error("No game ID specified. Use --game <id> or set GAME env var.");
     return;
   }
 
@@ -160,11 +159,10 @@ export async function viewStatus(
     node
   );
 
-  const config = loadConfig();
-  const gameId = options.game ?? config.currentGameId;
+  const gameId = getEffectiveGameId(options.game);
 
   if (!gameId) {
-    display.error("No game ID specified. Use --game <id> or create a game first.");
+    display.error("No game ID specified. Use --game <id> or set GAME env var.");
     return;
   }
 
@@ -222,11 +220,10 @@ export async function interactiveDashboard(
     node
   );
 
-  const config = loadConfig();
-  const gameId = options.game ?? config.currentGameId;
+  const gameId = getEffectiveGameId(options.game);
 
   if (!gameId) {
-    display.error("No game ID specified. Use --game <id> or create a game first.");
+    display.error("No game ID specified. Use --game <id> or set GAME env var.");
     return;
   }
 

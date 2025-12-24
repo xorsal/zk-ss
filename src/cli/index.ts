@@ -259,6 +259,8 @@ program
     }
     if (opts.passphrase) {
       globalPassphrase = opts.passphrase;
+    } else if (process.env.ZK_PASSPHRASE) {
+      globalPassphrase = process.env.ZK_PASSPHRASE;
     }
   });
 
